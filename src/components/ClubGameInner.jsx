@@ -28,6 +28,113 @@ export default function ClubGameInner() {
   const scaleX = dimensions.width / 600;
   const scaleY = dimensions.height / 400;
 
+  // Diamond geometry (reused for fill and clipping)
+  const diamondTop = {
+    x: 300 * scaleX,
+    y: 100 * scaleY + 200 * scaleY * 0.25,
+  };
+  const diamondRight = {
+    x: 300 * scaleX + 200 * scaleY * 0.585,
+    y: 200 * scaleY + 200 * scaleY * 0.1,
+  };
+  const diamondBottom = {
+    x: 300 * scaleX,
+    y: 100 * scaleY + 200 * scaleY * 0.95,
+  };
+  const diamondLeft = {
+    x: 300 * scaleX - 200 * scaleY * 0.585,
+    y: 200 * scaleY + 200 * scaleY * 0.1,
+  };
+  const diamondPoints = [
+    diamondTop.x,
+    diamondTop.y,
+    diamondRight.x,
+    diamondRight.y,
+    diamondBottom.x,
+    diamondBottom.y,
+    diamondLeft.x,
+    diamondLeft.y,
+    diamondTop.x,
+    diamondTop.y,
+  ];
+
+  // Build smaller diamonds grid (pre-shine version)
+  // Use the large diamond as base polygon
+  const baseRight = { ...diamondRight };
+  const baseBottom = { ...diamondBottom };
+  const baseLeft = { ...diamondLeft };
+  const basePolygon = [diamondTop, baseRight, baseBottom, baseLeft];
+
+  // Scale factor for small diamonds
+  const scaleFactor = 0.125;
+  const baseRightDelta = { x: baseRight.x - diamondTop.x, y: baseRight.y - diamondTop.y };
+  const baseBottomDelta = { x: baseBottom.x - diamondTop.x, y: baseBottom.y - diamondTop.y };
+  const baseLeftDelta = { x: baseLeft.x - diamondTop.x, y: baseLeft.y - diamondTop.y };
+
+  const computeDiamondFromTop = (topPoint) => {
+    const r = { x: topPoint.x + baseRightDelta.x * scaleFactor, y: topPoint.y + baseRightDelta.y * scaleFactor };
+    const b = { x: topPoint.x + baseBottomDelta.x * scaleFactor, y: topPoint.y + baseBottomDelta.y * scaleFactor };
+    const l = { x: topPoint.x + baseLeftDelta.x * scaleFactor, y: topPoint.y + baseLeftDelta.y * scaleFactor };
+    return {
+      top: topPoint,
+      right: r,
+      bottom: b,
+      left: l,
+      points: [topPoint.x, topPoint.y, r.x, r.y, b.x, b.y, l.x, l.y, topPoint.x, topPoint.y],
+    };
+  };
+
+  function isPointInConvexPolygon(point, polygon) {
+    const epsilon = 1e-6;
+    let sign = 0;
+    for (let i = 0; i < polygon.length; i++) {
+      const a = polygon[i];
+      const b = polygon[(i + 1) % polygon.length];
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const apx = point.x - a.x;
+      const apy = point.y - a.y;
+      const cross = abx * apy - aby * apx;
+      if (Math.abs(cross) <= epsilon) continue;
+      const currentSign = cross > 0 ? 1 : -1;
+      if (sign === 0) sign = currentSign;
+      else if (currentSign !== sign) return false;
+    }
+    return true;
+  }
+
+  function isDiamondInsideBase(diamond) {
+    return [diamond.top, diamond.right, diamond.bottom, diamond.left].every((p) => isPointInConvexPolygon(p, basePolygon));
+  }
+
+  const maxSteps = Math.floor(1 / scaleFactor);
+  const tempDiamonds = [];
+  for (let k = 0; k <= maxSteps; k++) {
+    for (let i = 0; i <= maxSteps - k; i++) {
+      for (let j = 0; j <= maxSteps - k - i; j++) {
+        const topPoint = {
+          x:
+            diamondTop.x +
+            baseRightDelta.x * scaleFactor * i +
+            baseLeftDelta.x * scaleFactor * j +
+            baseBottomDelta.x * scaleFactor * k,
+          y:
+            diamondTop.y +
+            baseRightDelta.y * scaleFactor * i +
+            baseLeftDelta.y * scaleFactor * j +
+            baseBottomDelta.y * scaleFactor * k,
+        };
+        tempDiamonds.push(computeDiamondFromTop(topPoint));
+      }
+    }
+  }
+  // Remove bottom-most row
+  const maxTopY = Math.max(...tempDiamonds.map((d) => d.top.y));
+  const epsilon = 0.25;
+  let diamondsGrid = tempDiamonds.filter((d) => d.top.y < maxTopY - epsilon);
+  // Clip to base walls
+  diamondsGrid = diamondsGrid.filter((d) => isDiamondInsideBase(d));
+
   return (
     <div className="flex flex-col items-center">
       <TextScore score={score} />
@@ -43,31 +150,29 @@ export default function ClubGameInner() {
             cornerRadius={10}
           />
 
-          {/* DJ booth */}
-          <Rect
-            x={250 * scaleX}
-            y={50 * scaleY}
-            width={100 * scaleX}
-            height={40 * scaleY}
-            fill="#aa4444"
-            cornerRadius={5}
-          />
-          <Text text="DJ Booth" x={260 * scaleX} y={55 * scaleY} fill="white" fontSize={18 * Math.min(scaleX, scaleY)} />
 
           {/* Diamond shape in center of dance floor */}
           <Line
-            points={[
-              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25), // top point (25% from top of dance floor)
-              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // right point (10% below center)
-              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.95), // bottom point (5% from bottom of dance floor)
-              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // left point (10% below center)
-              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25)  // back to top to close the shape
-            ]}
+            points={diamondPoints}
             closed={true}
             fill="#444466"
             stroke="#555577"
             strokeWidth={2}
           />
+
+          {/* Smaller diamonds grid (pre-shine) */}
+          {diamondsGrid.map((d, idx) => (
+            <Line
+              key={`diamond-${idx}`}
+              points={d.points}
+              closed={true}
+              fill="#444466"
+              stroke="#555577"
+              strokeWidth={2}
+            />
+          ))}
+
+          {/* Grid removed */}
 
           {/* Top left wall of diamond */}
           <Line
