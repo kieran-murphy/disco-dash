@@ -1,131 +1,104 @@
 "use client";
-import { Stage, Layer, Rect, Circle, Text } from "react-konva";
+import { Stage, Layer, Rect, Circle, Text, Line } from "react-konva";
 import { useEffect, useState } from "react";
 
 export default function ClubGameInner() {
-  const [dancers, setDancers] = useState([
-    { x: 150, y: 200, color: "#ffcc00" },
-    { x: 230, y: 200, color: "#ffcc00" },
-    { x: 310, y: 200, color: "#ffcc00" },
-    { x: 390, y: 200, color: "#ffcc00" },
-    { x: 470, y: 200, color: "#ffcc00" },
-  ]);
+  const [dancers, setDancers] = useState([]);
   const [lights, setLights] = useState([]);
   const [score, setScore] = useState(0);
+  const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
 
-  // Animate lights
+  // Calculate canvas dimensions based on viewport
   useEffect(() => {
-    const interval = setInterval(() => {
-      const newLights = [];
-      for (let i = 0; i < 5; i++) {
-        newLights.push({
-          x: 120 + Math.random() * 360,
-          y: 110 + Math.random() * 180,
-          color: `hsl(${Math.random() * 360}, 100%, 50%)`,
-        });
-      }
-      setLights(newLights);
-    }, 500);
-    return () => clearInterval(interval);
+    const updateDimensions = () => {
+      const width = Math.floor(window.innerWidth * 0.8);
+      const height = Math.floor(window.innerHeight * 0.8);
+      setDimensions({ width, height });
+    };
+
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Animate dancers up/down
-  useEffect(() => {
-    const ticker = setInterval(() => {
-      setDancers((prev) =>
-        prev.map((d, i) => ({
-          ...d,
-          y: 200 + Math.sin(Date.now() / 200 + i) * 10,
-        }))
-      );
-    }, 50);
-    return () => clearInterval(ticker);
-  }, []);
 
-  // Add dancer on floor click
-  const addDancer = (e) => {
-    const stage = e.target.getStage();
-    const pointer = stage.getPointerPosition();
-    if (!pointer) return;
 
-    // Only add if clicked inside dance floor
-    if (
-      pointer.x > 100 &&
-      pointer.x < 500 &&
-      pointer.y > 100 &&
-      pointer.y < 300
-    ) {
-      setDancers((prev) => [
-        ...prev,
-        { x: pointer.x, y: pointer.y, color: "#ffcc00" },
-      ]);
-    }
-  };
 
-  // Click a dancer to score points
-  const handleDancerClick = (index) => {
-    setScore((prev) => prev + 10);
-    setDancers((prev) =>
-      prev.map((d, i) =>
-        i === index
-          ? { ...d, color: `hsl(${Math.random() * 360}, 100%, 50%)` } // flash color
-          : d
-      )
-    );
-  };
+  // Calculate proportional positions based on canvas size
+  const scaleX = dimensions.width / 600;
+  const scaleY = dimensions.height / 400;
 
   return (
     <div className="flex flex-col items-center">
       <TextScore score={score} />
-      <Stage width={600} height={400} onClick={addDancer}>
+      <Stage width={dimensions.width} height={dimensions.height}>
         <Layer>
           {/* Dance floor */}
           <Rect
-            x={100}
-            y={100}
-            width={400}
-            height={200}
+            x={100 * scaleX}
+            y={100 * scaleY}
+            width={400 * scaleX}
+            height={200 * scaleY}
             fill="#222244"
             cornerRadius={10}
           />
 
           {/* DJ booth */}
           <Rect
-            x={250}
-            y={50}
-            width={100}
-            height={40}
+            x={250 * scaleX}
+            y={50 * scaleY}
+            width={100 * scaleX}
+            height={40 * scaleY}
             fill="#aa4444"
             cornerRadius={5}
           />
-          <Text text="DJ Booth" x={260} y={55} fill="white" fontSize={18} />
+          <Text text="DJ Booth" x={260 * scaleX} y={55 * scaleY} fill="white" fontSize={18 * Math.min(scaleX, scaleY)} />
 
-          {/* Dancers */}
-          {dancers.map((d, i) => (
-            <Circle
-              key={i}
-              x={d.x}
-              y={d.y}
-              radius={10}
-              fill={d.color}
-              onClick={(e) => {
-                e.cancelBubble = true; // prevent stage click
-                handleDancerClick(i);
-              }}
-            />
-          ))}
+          {/* Diamond shape in center of dance floor */}
+          <Line
+            points={[
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25), // top point (25% from top of dance floor)
+              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // right point (10% below center)
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.95), // bottom point (5% from bottom of dance floor)
+              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // left point (10% below center)
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25)  // back to top to close the shape
+            ]}
+            closed={true}
+            fill="#444466"
+            stroke="#555577"
+            strokeWidth={2}
+          />
 
-          {/* Lights */}
-          {lights.map((l, i) => (
-            <Circle
-              key={i}
-              x={l.x}
-              y={l.y}
-              radius={15}
-              fill={l.color}
-              opacity={0.6}
-            />
-          ))}
+          {/* Top left wall of diamond */}
+          <Line
+            points={[
+              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY), // left point raised with scaling (30 * 1.5 = 45)
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY), // top point raised with scaling (30 * 1.5 = 45)
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25), // top point original
+              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1)  // left point original
+            ]}
+            closed={true}
+            fill="#111133"
+            stroke="#222244"
+            strokeWidth={1}
+          />
+
+          {/* Top right wall of diamond */}
+          <Line
+            points={[
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY), // top point raised with scaling (30 * 1.5 = 45)
+              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY), // right point raised with scaling (30 * 1.5 = 45)
+              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // right point original
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25)  // top point original
+            ]}
+            closed={true}
+            fill="#111133"
+            stroke="#222244"
+            strokeWidth={1}
+          />
+
+
+
         </Layer>
       </Stage>
     </div>
