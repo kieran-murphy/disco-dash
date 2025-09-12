@@ -1,17 +1,23 @@
 "use client";
-import { Stage, Layer, Rect, Line } from "react-konva";
+import { Stage, Layer, Rect, Line, Image as KonvaImage } from "react-konva";
 import { useEffect, useState } from "react";
 
 export default function ClubGameInner() {
   const [dancers, setDancers] = useState([]);
   const [lights, setLights] = useState([]);
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
+  const [sprite1Image, setSprite1Image] = useState(null);
+  const [characterPos, setCharacterPos] = useState({ x: 300, y: 200 });
+  const [bounceOffset, setBounceOffset] = useState(0);
+  const [isMoving, setIsMoving] = useState(false);
+  const [targetPos, setTargetPos] = useState({ x: 300, y: 200 });
+  const [danceTimer, setDanceTimer] = useState(0);
 
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
     const updateDimensions = () => {
-      const width = Math.floor(window.innerWidth);
-      const height = Math.floor(window.innerHeight);
+      const width = Math.floor(window.innerWidth * 0.8);
+      const height = Math.floor(window.innerHeight * 0.8);
       setDimensions({ width, height });
     };
 
@@ -19,6 +25,90 @@ export default function ClubGameInner() {
     window.addEventListener('resize', updateDimensions);
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
+
+  // Load sprite1 image
+  useEffect(() => {
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      console.log('Sprite1 image loaded successfully');
+      setSprite1Image(img);
+    };
+    img.onerror = (error) => {
+      console.error('Failed to load sprite1 image:', error);
+    };
+    img.src = '/images/sprite1.png';
+  }, []);
+
+
+  // Bouncing animation for character
+  useEffect(() => {
+    const animate = () => {
+      setBounceOffset(prev => {
+        const time = Date.now() * 0.008; // Faster, more snappy
+        return Math.abs(Math.sin(time)) * 1.5; // Shorter bounce, more bop-like
+      });
+      requestAnimationFrame(animate);
+    };
+    animate();
+  }, []);
+
+  // Auto movement and dancing
+  useEffect(() => {
+    const moveAndDance = () => {
+      // If not moving, check if we should start moving to a new location
+      if (!isMoving) {
+        setDanceTimer(prev => {
+          const newTimer = prev + 1;
+          // Dance for 3-6 seconds (60-120 frames at 50ms intervals)
+          const danceDuration = 60 + Math.random() * 60;
+          
+          if (newTimer >= danceDuration) {
+            // Time to move to a new location
+            const centerX = 300;
+            const centerY = 200 + (200 * 0.1);
+            const maxWidth = 200 * 0.585;
+            const maxHeight = 200 * 0.7;
+            
+            // Generate random position within diamond bounds (with margin for character size)
+            const margin = 20; // Keep character away from edges
+            const randomY = centerY - (maxHeight/2 - margin) + Math.random() * (maxHeight - margin * 2);
+            const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight/2));
+            const randomX = centerX - (diamondWidthAtY/2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
+            
+            setTargetPos({ x: randomX, y: randomY });
+            setIsMoving(true);
+            return 0; // Reset timer
+          }
+          return newTimer;
+        });
+      } else {
+        // Move towards target
+        setCharacterPos(prevPos => {
+          const moveSpeed = 1;
+          const dx = targetPos.x - prevPos.x;
+          const dy = targetPos.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < moveSpeed) {
+            // Reached target, stop moving and start dancing
+            setIsMoving(false);
+            setDanceTimer(0); // Reset dance timer
+            return targetPos;
+          }
+          
+          // Move towards target
+          const newX = prevPos.x + (dx / distance) * moveSpeed;
+          const newY = prevPos.y + (dy / distance) * moveSpeed;
+          
+          return { x: newX, y: newY };
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50); // Move every 50ms
+    return () => clearInterval(interval);
+  }, [isMoving, targetPos]);
 
 
 
@@ -181,6 +271,7 @@ export default function ClubGameInner() {
             strokeWidth={2}
           />
 
+
           {/* Smaller diamonds grid (pre-shine) */}
           {diamondsGrid.map((d, idx) => (
             <Line
@@ -311,7 +402,37 @@ export default function ClubGameInner() {
             shadowBlur={6 * uiScale}
           />
 
+          {/* Character shadow */}
+          <Rect
+            x={characterPos.x * scaleX - (14 * scaleX)}
+            y={characterPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
 
+          {/* Sprite1 image on diamond - rendered on top */}
+          {sprite1Image ? (
+            <KonvaImage
+              image={sprite1Image}
+              x={characterPos.x * scaleX - (16 * scaleX)}
+              y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={characterPos.x * scaleX - (16 * scaleX)}
+              y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#ff0000"
+              opacity={1}
+            />
+          )}
 
         </Layer>
       </Stage>
