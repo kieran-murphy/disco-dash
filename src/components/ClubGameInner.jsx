@@ -1,18 +1,17 @@
 "use client";
-import { Stage, Layer, Rect, Circle, Text, Line } from "react-konva";
+import { Stage, Layer, Rect, Line } from "react-konva";
 import { useEffect, useState } from "react";
 
 export default function ClubGameInner() {
   const [dancers, setDancers] = useState([]);
   const [lights, setLights] = useState([]);
-  const [score, setScore] = useState(0);
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
 
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
     const updateDimensions = () => {
-      const width = Math.floor(window.innerWidth * 0.8);
-      const height = Math.floor(window.innerHeight * 0.8);
+      const width = Math.floor(window.innerWidth);
+      const height = Math.floor(window.innerHeight);
       setDimensions({ width, height });
     };
 
@@ -27,6 +26,7 @@ export default function ClubGameInner() {
   // Calculate proportional positions based on canvas size
   const scaleX = dimensions.width / 600;
   const scaleY = dimensions.height / 400;
+  const uiScale = Math.min(scaleX, scaleY);
 
   // Diamond geometry (reused for fill and clipping)
   const diamondTop = {
@@ -107,6 +107,28 @@ export default function ClubGameInner() {
     return [diamond.top, diamond.right, diamond.bottom, diamond.left].every((p) => isPointInConvexPolygon(p, basePolygon));
   }
 
+  // Per-diamond twinkle timing
+  const [twinkleTime, setTwinkleTime] = useState(0);
+  useEffect(() => {
+    let rafId;
+    let last = performance.now();
+    const loop = (now) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setTwinkleTime((t) => t + dt);
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  function rand01FromPoint(p) {
+    const v = Math.sin(p.x * 12.9898 + p.y * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  
+
   const maxSteps = Math.floor(1 / scaleFactor);
   const tempDiamonds = [];
   for (let k = 0; k <= maxSteps; k++) {
@@ -137,15 +159,14 @@ export default function ClubGameInner() {
 
   return (
     <div className="flex flex-col items-center">
-      <TextScore score={score} />
       <Stage width={dimensions.width} height={dimensions.height}>
         <Layer>
           {/* Dance floor */}
           <Rect
-            x={100 * scaleX}
-            y={100 * scaleY}
-            width={400 * scaleX}
-            height={200 * scaleY}
+            x={dimensions.width * 0.05}
+            y={dimensions.height * 0.05}
+            width={dimensions.width * 0.9}
+            height={dimensions.height * 0.9}
             fill="#222244"
             cornerRadius={10}
           />
@@ -172,6 +193,38 @@ export default function ClubGameInner() {
             />
           ))}
 
+          {/* Per-diamond twinkle glow overlays (staggered, more animated) */}
+          {diamondsGrid.map((d, idx) => {
+            const basePhase = rand01FromPoint(d.top) * Math.PI * 2;
+            const baseSpeed = 1.2 + rand01FromPoint(d.right) * 1.5; // faster per-tile speeds
+            const burstPhase = rand01FromPoint(d.bottom);
+            const burstInterval = 1.2 + burstPhase * 1.8; // more frequent bursts
+            const burstT = ((twinkleTime + burstPhase) % burstInterval) / burstInterval;
+            const burst = Math.pow(Math.max(0, Math.cos(burstT * Math.PI * 2)), 3); // sharper peaks
+            const wave = (Math.sin(twinkleTime * baseSpeed + basePhase) + 1) / 2; // 0..1
+            const pulse = wave * (0.45 + 0.55 * burst); // stronger during bursts
+            const opacity = 0.08 + pulse * 0.3;
+            const blur = 3.2 * Math.min(scaleX, scaleY) * (0.5 + pulse);
+            const colorShift = 0.8 + 0.2 * rand01FromPoint(d.left);
+            const color = `rgba(${Math.round(191*colorShift)}, ${Math.round(195*colorShift)}, 255, 1)`;
+            return (
+              <Line
+                key={`diamond-glow-${idx}`}
+                points={d.points}
+                closed={true}
+                fillEnabled={false}
+                stroke={color}
+                strokeWidth={1.8}
+                opacity={opacity}
+                shadowEnabled
+                shadowColor={color}
+                shadowBlur={blur}
+              />
+            );
+          })}
+
+          
+
           {/* Grid removed */}
 
           {/* Top left wall of diamond */}
@@ -186,6 +239,34 @@ export default function ClubGameInner() {
             fill="#111133"
             stroke="#222244"
             strokeWidth={1}
+            fillLinearGradientStartPoint={{
+              x: (300 * scaleX + (300 * scaleX - (200 * scaleY * 0.585))) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (200 * scaleY + 200 * scaleY * 0.1 - 45 * scaleY)) / 2,
+            }}
+            fillLinearGradientEndPoint={{
+              x: (300 * scaleX + (300 * scaleX - (200 * scaleY * 0.585))) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 + (200 * scaleY + 200 * scaleY * 0.1)) / 2,
+            }}
+            fillLinearGradientColorStops={[0, '#2a2a5a', 0.5, '#15153d', 1, '#0a0a27']}
+            shadowEnabled
+            shadowColor="#00051a"
+            shadowOpacity={0.6}
+            shadowBlur={18 * uiScale}
+            shadowOffset={{ x: 0, y: 6 * uiScale }}
+          />
+          {/* Top edge highlight - left wall */}
+          <Line
+            points={[
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY),
+              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY),
+            ]}
+            stroke="#aab0ff"
+            strokeWidth={2 * uiScale}
+            opacity={0.5}
+            lineCap="round"
+            shadowEnabled
+            shadowColor="#aab0ff"
+            shadowBlur={6 * uiScale}
           />
 
           {/* Top right wall of diamond */}
@@ -200,6 +281,34 @@ export default function ClubGameInner() {
             fill="#111133"
             stroke="#222244"
             strokeWidth={1}
+            fillLinearGradientStartPoint={{
+              x: (300 * scaleX + (300 * scaleX + 200 * scaleY * 0.585)) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (200 * scaleY + 200 * scaleY * 0.1 - 45 * scaleY)) / 2,
+            }}
+            fillLinearGradientEndPoint={{
+              x: (300 * scaleX + (300 * scaleX + 200 * scaleY * 0.585)) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 + (200 * scaleY + 200 * scaleY * 0.1)) / 2,
+            }}
+            fillLinearGradientColorStops={[0, '#2a2a5a', 0.5, '#15153d', 1, '#0a0a27']}
+            shadowEnabled
+            shadowColor="#00051a"
+            shadowOpacity={0.6}
+            shadowBlur={18 * uiScale}
+            shadowOffset={{ x: 0, y: 6 * uiScale }}
+          />
+          {/* Top edge highlight - right wall */}
+          <Line
+            points={[
+              300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY),
+              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY),
+            ]}
+            stroke="#aab0ff"
+            strokeWidth={2 * uiScale}
+            opacity={0.5}
+            lineCap="round"
+            shadowEnabled
+            shadowColor="#aab0ff"
+            shadowBlur={6 * uiScale}
           />
 
 
@@ -208,9 +317,4 @@ export default function ClubGameInner() {
       </Stage>
     </div>
   );
-}
-
-// Simple score display
-function TextScore({ score }) {
-  return <div className="text-white text-xl mb-2">Score: {score}</div>;
 }
