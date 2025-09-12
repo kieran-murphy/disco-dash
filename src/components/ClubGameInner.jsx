@@ -7,11 +7,70 @@ export default function ClubGameInner() {
   const [lights, setLights] = useState([]);
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
   const [sprite1Image, setSprite1Image] = useState(null);
+  const [sprite1bImage, setSprite1bImage] = useState(null);
+  const [sprite1cImage, setSprite1cImage] = useState(null);
+  const [sprite2Image, setSprite2Image] = useState(null);
+  const [sprite2bImage, setSprite2bImage] = useState(null);
+  const [sprite2cImage, setSprite2cImage] = useState(null);
+  const [sprite2dImage, setSprite2dImage] = useState(null);
+  const [sprite3aImage, setSprite3aImage] = useState(null);
+  const [sprite3bImage, setSprite3bImage] = useState(null);
+  const [sprite3cImage, setSprite3cImage] = useState(null);
+  
   const [characterPos, setCharacterPos] = useState({ x: 300, y: 200 });
+  const [character1bPos, setCharacter1bPos] = useState({ x: 250, y: 180 });
+  const [character1cPos, setCharacter1cPos] = useState({ x: 350, y: 220 });
+  const [character2Pos, setCharacter2Pos] = useState({ x: 280, y: 240 });
+  const [character2bPos, setCharacter2bPos] = useState({ x: 320, y: 160 });
+  const [character2cPos, setCharacter2cPos] = useState({ x: 240, y: 200 });
+  const [character2dPos, setCharacter2dPos] = useState({ x: 360, y: 200 });
+  const [character3aPos, setCharacter3aPos] = useState({ x: 300, y: 160 });
+  const [character3bPos, setCharacter3bPos] = useState({ x: 260, y: 240 });
+  const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 180 });
+  
   const [bounceOffset, setBounceOffset] = useState(0);
+  const [bounceOffset1b, setBounceOffset1b] = useState(0);
+  const [bounceOffset1c, setBounceOffset1c] = useState(0);
+  const [bounceOffset2, setBounceOffset2] = useState(0);
+  const [bounceOffset2b, setBounceOffset2b] = useState(0);
+  const [bounceOffset2c, setBounceOffset2c] = useState(0);
+  const [bounceOffset2d, setBounceOffset2d] = useState(0);
+  const [bounceOffset3a, setBounceOffset3a] = useState(0);
+  const [bounceOffset3b, setBounceOffset3b] = useState(0);
+  const [bounceOffset3c, setBounceOffset3c] = useState(0);
+  
   const [isMoving, setIsMoving] = useState(false);
+  const [isMoving1b, setIsMoving1b] = useState(false);
+  const [isMoving1c, setIsMoving1c] = useState(false);
+  const [isMoving2, setIsMoving2] = useState(false);
+  const [isMoving2b, setIsMoving2b] = useState(false);
+  const [isMoving2c, setIsMoving2c] = useState(false);
+  const [isMoving2d, setIsMoving2d] = useState(false);
+  const [isMoving3a, setIsMoving3a] = useState(false);
+  const [isMoving3b, setIsMoving3b] = useState(false);
+  const [isMoving3c, setIsMoving3c] = useState(false);
+  
   const [targetPos, setTargetPos] = useState({ x: 300, y: 200 });
+  const [targetPos1b, setTargetPos1b] = useState({ x: 250, y: 180 });
+  const [targetPos1c, setTargetPos1c] = useState({ x: 350, y: 220 });
+  const [targetPos2, setTargetPos2] = useState({ x: 280, y: 240 });
+  const [targetPos2b, setTargetPos2b] = useState({ x: 320, y: 160 });
+  const [targetPos2c, setTargetPos2c] = useState({ x: 240, y: 200 });
+  const [targetPos2d, setTargetPos2d] = useState({ x: 360, y: 200 });
+  const [targetPos3a, setTargetPos3a] = useState({ x: 300, y: 160 });
+  const [targetPos3b, setTargetPos3b] = useState({ x: 260, y: 240 });
+  const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 180 });
+  
   const [danceTimer, setDanceTimer] = useState(0);
+  const [danceTimer1b, setDanceTimer1b] = useState(0);
+  const [danceTimer1c, setDanceTimer1c] = useState(0);
+  const [danceTimer2, setDanceTimer2] = useState(0);
+  const [danceTimer2b, setDanceTimer2b] = useState(0);
+  const [danceTimer2c, setDanceTimer2c] = useState(0);
+  const [danceTimer2d, setDanceTimer2d] = useState(0);
+  const [danceTimer3a, setDanceTimer3a] = useState(0);
+  const [danceTimer3b, setDanceTimer3b] = useState(0);
+  const [danceTimer3c, setDanceTimer3c] = useState(0);
 
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
@@ -26,28 +85,146 @@ export default function ClubGameInner() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Load sprite1 image
+  // Load all sprite images
   useEffect(() => {
-    const img = new window.Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
+    // Load sprite1
+    const img1 = new window.Image();
+    img1.crossOrigin = 'anonymous';
+    img1.onload = () => {
       console.log('Sprite1 image loaded successfully');
-      setSprite1Image(img);
+      setSprite1Image(img1);
     };
-    img.onerror = (error) => {
+    img1.onerror = (error) => {
       console.error('Failed to load sprite1 image:', error);
     };
-    img.src = '/images/sprite1.png';
+    img1.src = '/images/sprite1.png';
+
+    // Load sprite1b
+    const img1b = new window.Image();
+    img1b.crossOrigin = 'anonymous';
+    img1b.onload = () => {
+      console.log('Sprite1b image loaded successfully');
+      setSprite1bImage(img1b);
+    };
+    img1b.onerror = (error) => {
+      console.error('Failed to load sprite1b image:', error);
+    };
+    img1b.src = '/images/sprite1b.png';
+
+    // Load sprite1c
+    const img1c = new window.Image();
+    img1c.crossOrigin = 'anonymous';
+    img1c.onload = () => {
+      console.log('Sprite1c image loaded successfully');
+      setSprite1cImage(img1c);
+    };
+    img1c.onerror = (error) => {
+      console.error('Failed to load sprite1c image:', error);
+    };
+    img1c.src = '/images/sprite1c.png';
+
+    // Load sprite2
+    const img2 = new window.Image();
+    img2.crossOrigin = 'anonymous';
+    img2.onload = () => {
+      console.log('Sprite2 image loaded successfully');
+      setSprite2Image(img2);
+    };
+    img2.onerror = (error) => {
+      console.error('Failed to load sprite2 image:', error);
+    };
+    img2.src = '/images/sprite2.png';
+
+    // Load sprite2b
+    const img2b = new window.Image();
+    img2b.crossOrigin = 'anonymous';
+    img2b.onload = () => {
+      console.log('Sprite2b image loaded successfully');
+      setSprite2bImage(img2b);
+    };
+    img2b.onerror = (error) => {
+      console.error('Failed to load sprite2b image:', error);
+    };
+    img2b.src = '/images/sprite2b.png';
+
+    // Load sprite2c
+    const img2c = new window.Image();
+    img2c.crossOrigin = 'anonymous';
+    img2c.onload = () => {
+      console.log('Sprite2c image loaded successfully');
+      setSprite2cImage(img2c);
+    };
+    img2c.onerror = (error) => {
+      console.error('Failed to load sprite2c image:', error);
+    };
+    img2c.src = '/images/sprite2c.png';
+
+    // Load sprite2d
+    const img2d = new window.Image();
+    img2d.crossOrigin = 'anonymous';
+    img2d.onload = () => {
+      console.log('Sprite2d image loaded successfully');
+      setSprite2dImage(img2d);
+    };
+    img2d.onerror = (error) => {
+      console.error('Failed to load sprite2d image:', error);
+    };
+    img2d.src = '/images/sprite2d.png';
+
+    // Load sprite3a
+    const img3a = new window.Image();
+    img3a.crossOrigin = 'anonymous';
+    img3a.onload = () => {
+      console.log('Sprite3a image loaded successfully');
+      setSprite3aImage(img3a);
+    };
+    img3a.onerror = (error) => {
+      console.error('Failed to load sprite3a image:', error);
+    };
+    img3a.src = '/images/sprite3a.png';
+
+    // Load sprite3b
+    const img3b = new window.Image();
+    img3b.crossOrigin = 'anonymous';
+    img3b.onload = () => {
+      console.log('Sprite3b image loaded successfully');
+      setSprite3bImage(img3b);
+    };
+    img3b.onerror = (error) => {
+      console.error('Failed to load sprite3b image:', error);
+    };
+    img3b.src = '/images/sprite3b.png';
+
+    // Load sprite3c
+    const img3c = new window.Image();
+    img3c.crossOrigin = 'anonymous';
+    img3c.onload = () => {
+      console.log('Sprite3c image loaded successfully');
+      setSprite3cImage(img3c);
+    };
+    img3c.onerror = (error) => {
+      console.error('Failed to load sprite3c image:', error);
+    };
+    img3c.src = '/images/sprite3c.png';
   }, []);
 
 
-  // Bouncing animation for character
+  // Bouncing animation for all characters
   useEffect(() => {
     const animate = () => {
-      setBounceOffset(prev => {
-        const time = Date.now() * 0.008; // Faster, more snappy
-        return Math.abs(Math.sin(time)) * 1.5; // Shorter bounce, more bop-like
-      });
+      const time = Date.now() * 0.008; // Faster, more snappy
+      
+      setBounceOffset(Math.abs(Math.sin(time)) * 1.5);
+      setBounceOffset1b(Math.abs(Math.sin(time + 0.5)) * 1.5);
+      setBounceOffset1c(Math.abs(Math.sin(time + 1.0)) * 1.5);
+      setBounceOffset2(Math.abs(Math.sin(time + 1.5)) * 1.5);
+      setBounceOffset2b(Math.abs(Math.sin(time + 2.0)) * 1.5);
+      setBounceOffset2c(Math.abs(Math.sin(time + 2.5)) * 1.5);
+      setBounceOffset2d(Math.abs(Math.sin(time + 3.0)) * 1.5);
+      setBounceOffset3a(Math.abs(Math.sin(time + 3.5)) * 1.5);
+      setBounceOffset3b(Math.abs(Math.sin(time + 4.0)) * 1.5);
+      setBounceOffset3c(Math.abs(Math.sin(time + 4.5)) * 1.5);
+      
       requestAnimationFrame(animate);
     };
     animate();
@@ -109,6 +286,56 @@ export default function ClubGameInner() {
     const interval = setInterval(moveAndDance, 50); // Move every 50ms
     return () => clearInterval(interval);
   }, [isMoving, targetPos]);
+
+  // Auto movement and dancing for character1b
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving1b) {
+        setDanceTimer1b(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 60 + Math.random() * 60;
+          
+          if (newTimer >= danceDuration) {
+            const centerX = 300;
+            const centerY = 200 + (200 * 0.1);
+            const maxWidth = 200 * 0.585;
+            const maxHeight = 200 * 0.7;
+            
+            const margin = 20;
+            const randomY = centerY - (maxHeight/2 - margin) + Math.random() * (maxHeight - margin * 2);
+            const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight/2));
+            const randomX = centerX - (diamondWidthAtY/2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
+            
+            setTargetPos1b({ x: randomX, y: randomY });
+            setIsMoving1b(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter1bPos(prevPos => {
+          const moveSpeed = 1;
+          const dx = targetPos1b.x - prevPos.x;
+          const dy = targetPos1b.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < moveSpeed) {
+            setIsMoving1b(false);
+            setDanceTimer1b(0);
+            return targetPos1b;
+          }
+          
+          const newX = prevPos.x + (dx / distance) * moveSpeed;
+          const newY = prevPos.y + (dy / distance) * moveSpeed;
+          
+          return { x: newX, y: newY };
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving1b, targetPos1b]);
 
 
 
@@ -413,7 +640,20 @@ export default function ClubGameInner() {
             cornerRadius={14 * scaleX}
           />
 
-          {/* Sprite1 image on diamond - rendered on top */}
+          {/* All characters on diamond - rendered on top */}
+          
+          {/* Character shadow */}
+          <Rect
+            x={characterPos.x * scaleX - (14 * scaleX)}
+            y={characterPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite1 */}
           {sprite1Image ? (
             <KonvaImage
               image={sprite1Image}
@@ -430,6 +670,294 @@ export default function ClubGameInner() {
               width={32 * scaleX}
               height={32 * scaleY}
               fill="#ff0000"
+              opacity={1}
+            />
+          )}
+
+          {/* Character1b shadow */}
+          <Rect
+            x={character1bPos.x * scaleX - (14 * scaleX)}
+            y={character1bPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset1b * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite1b */}
+          {sprite1bImage ? (
+            <KonvaImage
+              image={sprite1bImage}
+              x={character1bPos.x * scaleX - (16 * scaleX)}
+              y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character1bPos.x * scaleX - (16 * scaleX)}
+              y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#00ff00"
+              opacity={1}
+            />
+          )}
+
+          {/* Character1c shadow */}
+          <Rect
+            x={character1cPos.x * scaleX - (14 * scaleX)}
+            y={character1cPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset1c * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite1c */}
+          {sprite1cImage ? (
+            <KonvaImage
+              image={sprite1cImage}
+              x={character1cPos.x * scaleX - (16 * scaleX)}
+              y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character1cPos.x * scaleX - (16 * scaleX)}
+              y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#0000ff"
+              opacity={1}
+            />
+          )}
+
+          {/* Character2 shadow */}
+          <Rect
+            x={character2Pos.x * scaleX - (14 * scaleX)}
+            y={character2Pos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset2 * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite2 */}
+          {sprite2Image ? (
+            <KonvaImage
+              image={sprite2Image}
+              x={character2Pos.x * scaleX - (16 * scaleX)}
+              y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character2Pos.x * scaleX - (16 * scaleX)}
+              y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#ffff00"
+              opacity={1}
+            />
+          )}
+
+          {/* Character2b shadow */}
+          <Rect
+            x={character2bPos.x * scaleX - (14 * scaleX)}
+            y={character2bPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset2b * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite2b */}
+          {sprite2bImage ? (
+            <KonvaImage
+              image={sprite2bImage}
+              x={character2bPos.x * scaleX - (16 * scaleX)}
+              y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character2bPos.x * scaleX - (16 * scaleX)}
+              y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#ff00ff"
+              opacity={1}
+            />
+          )}
+
+          {/* Character2c shadow */}
+          <Rect
+            x={character2cPos.x * scaleX - (14 * scaleX)}
+            y={character2cPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset2c * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite2c */}
+          {sprite2cImage ? (
+            <KonvaImage
+              image={sprite2cImage}
+              x={character2cPos.x * scaleX - (16 * scaleX)}
+              y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character2cPos.x * scaleX - (16 * scaleX)}
+              y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#00ffff"
+              opacity={1}
+            />
+          )}
+
+          {/* Character2d shadow */}
+          <Rect
+            x={character2dPos.x * scaleX - (14 * scaleX)}
+            y={character2dPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset2d * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite2d */}
+          {sprite2dImage ? (
+            <KonvaImage
+              image={sprite2dImage}
+              x={character2dPos.x * scaleX - (16 * scaleX)}
+              y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character2dPos.x * scaleX - (16 * scaleX)}
+              y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#ff8800"
+              opacity={1}
+            />
+          )}
+
+          {/* Character3a shadow */}
+          <Rect
+            x={character3aPos.x * scaleX - (14 * scaleX)}
+            y={character3aPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset3a * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite3a */}
+          {sprite3aImage ? (
+            <KonvaImage
+              image={sprite3aImage}
+              x={character3aPos.x * scaleX - (16 * scaleX)}
+              y={(character3aPos.y + bounceOffset3a) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character3aPos.x * scaleX - (16 * scaleX)}
+              y={(character3aPos.y + bounceOffset3a) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#8800ff"
+              opacity={1}
+            />
+          )}
+
+          {/* Character3b shadow */}
+          <Rect
+            x={character3bPos.x * scaleX - (14 * scaleX)}
+            y={character3bPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset3b * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite3b */}
+          {sprite3bImage ? (
+            <KonvaImage
+              image={sprite3bImage}
+              x={character3bPos.x * scaleX - (16 * scaleX)}
+              y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character3bPos.x * scaleX - (16 * scaleX)}
+              y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#0088ff"
+              opacity={1}
+            />
+          )}
+
+          {/* Character3c shadow */}
+          <Rect
+            x={character3cPos.x * scaleX - (14 * scaleX)}
+            y={character3cPos.y * scaleY + (8 * scaleY)}
+            width={28 * scaleX}
+            height={16 * scaleY}
+            fill="#000000"
+            opacity={0.15 - (bounceOffset3c * 0.02)}
+            cornerRadius={14 * scaleX}
+          />
+          
+          {/* Sprite3c */}
+          {sprite3cImage ? (
+            <KonvaImage
+              image={sprite3cImage}
+              x={character3cPos.x * scaleX - (16 * scaleX)}
+              y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              opacity={1}
+            />
+          ) : (
+            <Rect
+              x={character3cPos.x * scaleX - (16 * scaleX)}
+              y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
+              width={32 * scaleX}
+              height={32 * scaleY}
+              fill="#ff0088"
               opacity={1}
             />
           )}
