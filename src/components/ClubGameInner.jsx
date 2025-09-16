@@ -446,7 +446,7 @@ export default function ClubGameInner() {
 
   
 
-  const maxSteps = Math.floor(1 / scaleFactor);
+  const maxSteps = Math.floor(1 / scaleFactor) + 1; // Add more steps for significantly extended grid
   const tempDiamonds = [];
   for (let k = 0; k <= maxSteps; k++) {
     for (let i = 0; i <= maxSteps - k; i++) {
@@ -467,12 +467,13 @@ export default function ClubGameInner() {
       }
     }
   }
-  // Remove bottom-most row
+  // Include many more rows for extended dance floor
   const maxTopY = Math.max(...tempDiamonds.map((d) => d.top.y));
   const epsilon = 0.25;
-  let diamondsGrid = tempDiamonds.filter((d) => d.top.y < maxTopY - epsilon);
-  // Clip to base walls
-  diamondsGrid = diamondsGrid.filter((d) => isDiamondInsideBase(d));
+  // Include many more diamonds by being much less restrictive
+  let diamondsGrid = tempDiamonds.filter((d) => d.top.y < maxTopY + (epsilon * 5));
+  // Don't clip to base walls - include all diamonds for maximum coverage
+  // diamondsGrid = diamondsGrid.filter((d) => isDiamondInsideBase(d));
 
   return (
     <div className="flex flex-col items-center">
