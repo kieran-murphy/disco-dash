@@ -1,6 +1,75 @@
 "use client";
 import { Stage, Layer, Rect, Line, Image as KonvaImage } from "react-konva";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+// Picks a random spot on the dance floor that isn't too close to anyone in `otherPositions`.
+// Stops at the first candidate that clears minDistance (rather than searching for the single best
+// one) so different dancers deciding around the same time don't all converge on the same "most
+// isolated" spot — that greedy-maximization approach was tried and reliably produced a single
+// pileup at whichever corner was farthest from the crowd. Falls back to the roomiest, least-crowded
+// candidate found if nothing clears the threshold within the attempt budget.
+function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
+  // Scale the roaming diamond by the same factor the dance floor's tile grid and back walls are
+  // extended by (see maxSteps/farLeft/farRight below), so dancers use the whole rendered floor
+  // instead of just the original small diamond.
+  const gridScaleFactor = 0.125;
+  const gridMaxSteps = Math.floor(1 / gridScaleFactor) + 1;
+  const extendedMultiplier = gridScaleFactor * (gridMaxSteps + 1);
+
+  const topY = 100 + 200 * 0.25; // matches diamondTop's y in the unscaled 600x400 reference frame
+  const centerX = 300;
+  const maxWidth = 200 * 0.585 * extendedMultiplier;
+  const maxHeight = 200 * 0.7 * extendedMultiplier;
+  const centerY = topY + maxHeight / 2;
+  const margin = 20;
+
+  let bestCandidate = null;
+  let bestScore = -Infinity;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const randomY = centerY - (maxHeight / 2 - margin) + Math.random() * (maxHeight - margin * 2);
+    const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight / 2));
+    if (diamondWidthAtY < margin * 2) continue; // too narrow near the diamond's tips to place a character
+    const randomX = centerX - (diamondWidthAtY / 2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
+
+    const minDist = otherPositions.length === 0
+      ? Infinity
+      : Math.min(...otherPositions.map((p) => Math.hypot(p.x - randomX, p.y - randomY)));
+
+    if (minDist >= minDistance) {
+      return { x: randomX, y: randomY };
+    }
+    if (minDist > bestScore) {
+      bestScore = minDist;
+      bestCandidate = { x: randomX, y: randomY };
+    }
+  }
+
+  if (!bestCandidate) {
+    return { x: centerX, y: centerY };
+  }
+
+  return bestCandidate;
+}
+
+// Nudges (x, y) away from any position in `otherPositions` that's closer than minSeparation,
+// applied every movement tick so dancers deflect off each other mid-transit instead of walking
+// straight through — a soft "bounce" rather than a hard collision.
+function applySeparation(x, y, otherPositions, minSeparation = 30) {
+  let pushX = 0;
+  let pushY = 0;
+  for (const other of otherPositions) {
+    const dx = x - other.x;
+    const dy = y - other.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 0.001 && dist < minSeparation) {
+      const strength = (minSeparation - dist) / minSeparation;
+      pushX += (dx / dist) * strength;
+      pushY += (dy / dist) * strength;
+    }
+  }
+  return { x: x + pushX * 2, y: y + pushY * 2 };
+}
 
 export default function ClubGameInner() {
   const [dancers, setDancers] = useState([]);
@@ -27,7 +96,25 @@ export default function ClubGameInner() {
   const [character3aPos, setCharacter3aPos] = useState({ x: 300, y: 160 });
   const [character3bPos, setCharacter3bPos] = useState({ x: 260, y: 240 });
   const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 180 });
-  
+
+  // Live mirror of every dancer's position, kept in a ref so any dancer's movement effect
+  // can read everyone else's current spot without going stale between its own re-runs.
+  const positionsRef = useRef({});
+  useEffect(() => {
+    positionsRef.current = {
+      character: characterPos,
+      character1b: character1bPos,
+      character1c: character1cPos,
+      character2: character2Pos,
+      character2b: character2bPos,
+      character2c: character2cPos,
+      character2d: character2dPos,
+      character3a: character3aPos,
+      character3b: character3bPos,
+      character3c: character3cPos,
+    };
+  }, [characterPos, character1bPos, character1cPos, character2Pos, character2bPos, character2cPos, character2dPos, character3aPos, character3bPos, character3cPos]);
+
   const [bounceOffset, setBounceOffset] = useState(0);
   const [bounceOffset1b, setBounceOffset1b] = useState(0);
   const [bounceOffset1c, setBounceOffset1c] = useState(0);
@@ -61,16 +148,17 @@ export default function ClubGameInner() {
   const [targetPos3b, setTargetPos3b] = useState({ x: 260, y: 240 });
   const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 180 });
   
+  // Staggered starting offsets so all 10 dancers don't begin their first dance cycle in lockstep.
   const [danceTimer, setDanceTimer] = useState(0);
-  const [danceTimer1b, setDanceTimer1b] = useState(0);
-  const [danceTimer1c, setDanceTimer1c] = useState(0);
-  const [danceTimer2, setDanceTimer2] = useState(0);
-  const [danceTimer2b, setDanceTimer2b] = useState(0);
-  const [danceTimer2c, setDanceTimer2c] = useState(0);
-  const [danceTimer2d, setDanceTimer2d] = useState(0);
-  const [danceTimer3a, setDanceTimer3a] = useState(0);
-  const [danceTimer3b, setDanceTimer3b] = useState(0);
-  const [danceTimer3c, setDanceTimer3c] = useState(0);
+  const [danceTimer1b, setDanceTimer1b] = useState(16);
+  const [danceTimer1c, setDanceTimer1c] = useState(32);
+  const [danceTimer2, setDanceTimer2] = useState(48);
+  const [danceTimer2b, setDanceTimer2b] = useState(64);
+  const [danceTimer2c, setDanceTimer2c] = useState(80);
+  const [danceTimer2d, setDanceTimer2d] = useState(96);
+  const [danceTimer3a, setDanceTimer3a] = useState(112);
+  const [danceTimer3b, setDanceTimer3b] = useState(128);
+  const [danceTimer3c, setDanceTimer3c] = useState(144);
 
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
@@ -237,23 +325,15 @@ export default function ClubGameInner() {
       if (!isMoving) {
         setDanceTimer(prev => {
           const newTimer = prev + 1;
-          // Dance for 3-6 seconds (60-120 frames at 50ms intervals)
-          const danceDuration = 60 + Math.random() * 60;
-          
+          // Dance for 2-10 seconds (40-200 frames at 50ms intervals)
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving
+
           if (newTimer >= danceDuration) {
-            // Time to move to a new location
-            const centerX = 300;
-            const centerY = 200 + (200 * 0.1);
-            const maxWidth = 200 * 0.585;
-            const maxHeight = 200 * 0.7;
-            
-            // Generate random position within diamond bounds (with margin for character size)
-            const margin = 20; // Keep character away from edges
-            const randomY = centerY - (maxHeight/2 - margin) + Math.random() * (maxHeight - margin * 2);
-            const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight/2));
-            const randomX = centerX - (diamondWidthAtY/2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
-            
-            setTargetPos({ x: randomX, y: randomY });
+            // Pick a spot away from where the other dancers currently are
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character')
+              .map(([, pos]) => pos);
+            setTargetPos(pickNonOverlappingTarget(others));
             setIsMoving(true);
             return 0; // Reset timer
           }
@@ -262,23 +342,25 @@ export default function ClubGameInner() {
       } else {
         // Move towards target
         setCharacterPos(prevPos => {
-          const moveSpeed = 1;
+          const moveSpeed = 0.5;
           const dx = targetPos.x - prevPos.x;
           const dy = targetPos.y - prevPos.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
-          
+
           if (distance < moveSpeed) {
             // Reached target, stop moving and start dancing
             setIsMoving(false);
             setDanceTimer(0); // Reset dance timer
             return targetPos;
           }
-          
-          // Move towards target
-          const newX = prevPos.x + (dx / distance) * moveSpeed;
-          const newY = prevPos.y + (dy / distance) * moveSpeed;
-          
-          return { x: newX, y: newY };
+
+          // Move towards target, then deflect off anyone we're brushing past
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
         });
       }
     };
@@ -293,20 +375,13 @@ export default function ClubGameInner() {
       if (!isMoving1b) {
         setDanceTimer1b(prev => {
           const newTimer = prev + 1;
-          const danceDuration = 60 + Math.random() * 60;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
           
           if (newTimer >= danceDuration) {
-            const centerX = 300;
-            const centerY = 200 + (200 * 0.1);
-            const maxWidth = 200 * 0.585;
-            const maxHeight = 200 * 0.7;
-            
-            const margin = 20;
-            const randomY = centerY - (maxHeight/2 - margin) + Math.random() * (maxHeight - margin * 2);
-            const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight/2));
-            const randomX = centerX - (diamondWidthAtY/2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
-            
-            setTargetPos1b({ x: randomX, y: randomY });
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character1b')
+              .map(([, pos]) => pos);
+            setTargetPos1b(pickNonOverlappingTarget(others));
             setIsMoving1b(true);
             return 0;
           }
@@ -314,21 +389,23 @@ export default function ClubGameInner() {
         });
       } else {
         setCharacter1bPos(prevPos => {
-          const moveSpeed = 1;
+          const moveSpeed = 0.5;
           const dx = targetPos1b.x - prevPos.x;
           const dy = targetPos1b.y - prevPos.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
-          
+
           if (distance < moveSpeed) {
             setIsMoving1b(false);
             setDanceTimer1b(0);
             return targetPos1b;
           }
-          
-          const newX = prevPos.x + (dx / distance) * moveSpeed;
-          const newY = prevPos.y + (dy / distance) * moveSpeed;
-          
-          return { x: newX, y: newY };
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character1b')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
         });
       }
     };
@@ -337,7 +414,365 @@ export default function ClubGameInner() {
     return () => clearInterval(interval);
   }, [isMoving1b, targetPos1b]);
 
+  // Auto movement and dancing for character1c
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving1c) {
+        setDanceTimer1c(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
 
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character1c')
+              .map(([, pos]) => pos);
+            setTargetPos1c(pickNonOverlappingTarget(others));
+            setIsMoving1c(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter1cPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos1c.x - prevPos.x;
+          const dy = targetPos1c.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving1c(false);
+            setDanceTimer1c(0);
+            return targetPos1c;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character1c')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving1c, targetPos1c]);
+
+  // Auto movement and dancing for character2
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving2) {
+        setDanceTimer2(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character2')
+              .map(([, pos]) => pos);
+            setTargetPos2(pickNonOverlappingTarget(others));
+            setIsMoving2(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter2Pos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos2.x - prevPos.x;
+          const dy = targetPos2.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving2(false);
+            setDanceTimer2(0);
+            return targetPos2;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character2')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving2, targetPos2]);
+
+  // Auto movement and dancing for character2b
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving2b) {
+        setDanceTimer2b(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character2b')
+              .map(([, pos]) => pos);
+            setTargetPos2b(pickNonOverlappingTarget(others));
+            setIsMoving2b(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter2bPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos2b.x - prevPos.x;
+          const dy = targetPos2b.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving2b(false);
+            setDanceTimer2b(0);
+            return targetPos2b;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character2b')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving2b, targetPos2b]);
+
+  // Auto movement and dancing for character2c
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving2c) {
+        setDanceTimer2c(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character2c')
+              .map(([, pos]) => pos);
+            setTargetPos2c(pickNonOverlappingTarget(others));
+            setIsMoving2c(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter2cPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos2c.x - prevPos.x;
+          const dy = targetPos2c.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving2c(false);
+            setDanceTimer2c(0);
+            return targetPos2c;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character2c')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving2c, targetPos2c]);
+
+  // Auto movement and dancing for character2d
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving2d) {
+        setDanceTimer2d(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character2d')
+              .map(([, pos]) => pos);
+            setTargetPos2d(pickNonOverlappingTarget(others));
+            setIsMoving2d(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter2dPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos2d.x - prevPos.x;
+          const dy = targetPos2d.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving2d(false);
+            setDanceTimer2d(0);
+            return targetPos2d;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character2d')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving2d, targetPos2d]);
+
+  // Auto movement and dancing for character3a
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving3a) {
+        setDanceTimer3a(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character3a')
+              .map(([, pos]) => pos);
+            setTargetPos3a(pickNonOverlappingTarget(others));
+            setIsMoving3a(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter3aPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos3a.x - prevPos.x;
+          const dy = targetPos3a.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving3a(false);
+            setDanceTimer3a(0);
+            return targetPos3a;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character3a')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving3a, targetPos3a]);
+
+  // Auto movement and dancing for character3b
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving3b) {
+        setDanceTimer3b(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character3b')
+              .map(([, pos]) => pos);
+            setTargetPos3b(pickNonOverlappingTarget(others));
+            setIsMoving3b(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter3bPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos3b.x - prevPos.x;
+          const dy = targetPos3b.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving3b(false);
+            setDanceTimer3b(0);
+            return targetPos3b;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character3b')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving3b, targetPos3b]);
+
+  // Auto movement and dancing for character3c
+  useEffect(() => {
+    const moveAndDance = () => {
+      if (!isMoving3c) {
+        setDanceTimer3c(prev => {
+          const newTimer = prev + 1;
+          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
+
+          if (newTimer >= danceDuration) {
+            const others = Object.entries(positionsRef.current)
+              .filter(([key]) => key !== 'character3c')
+              .map(([, pos]) => pos);
+            setTargetPos3c(pickNonOverlappingTarget(others));
+            setIsMoving3c(true);
+            return 0;
+          }
+          return newTimer;
+        });
+      } else {
+        setCharacter3cPos(prevPos => {
+          const moveSpeed = 0.5;
+          const dx = targetPos3c.x - prevPos.x;
+          const dy = targetPos3c.y - prevPos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < moveSpeed) {
+            setIsMoving3c(false);
+            setDanceTimer3c(0);
+            return targetPos3c;
+          }
+
+          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
+          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
+          const others = Object.entries(positionsRef.current)
+            .filter(([key]) => key !== 'character3c')
+            .map(([, pos]) => pos);
+          return applySeparation(steppedX, steppedY, others);
+        });
+      }
+    };
+
+    const interval = setInterval(moveAndDance, 50);
+    return () => clearInterval(interval);
+  }, [isMoving3c, targetPos3c]);
 
 
   // Calculate proportional positions based on canvas size
@@ -475,6 +910,18 @@ export default function ClubGameInner() {
   // Don't clip to base walls - include all diamonds for maximum coverage
   // diamondsGrid = diamondsGrid.filter((d) => isDiamondInsideBase(d));
 
+  // Outer corners of the extended dance floor (farthest tile edge along each wall direction),
+  // so the back walls reach the true edges of the rendered floor instead of the original small diamond.
+  const extendedMultiplier = scaleFactor * (maxSteps + 1);
+  const farRight = {
+    x: diamondTop.x + baseRightDelta.x * extendedMultiplier,
+    y: diamondTop.y + baseRightDelta.y * extendedMultiplier,
+  };
+  const farLeft = {
+    x: diamondTop.x + baseLeftDelta.x * extendedMultiplier,
+    y: diamondTop.y + baseLeftDelta.y * extendedMultiplier,
+  };
+
   return (
     <div className="flex flex-col items-center">
       <Stage width={dimensions.width} height={dimensions.height}>
@@ -549,22 +996,22 @@ export default function ClubGameInner() {
           {/* Top left wall of diamond */}
           <Line
             points={[
-              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY), // left point raised with scaling (30 * 1.5 = 45)
+              farLeft.x, farLeft.y - (45 * scaleY), // left point raised with scaling (30 * 1.5 = 45)
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY), // top point raised with scaling (30 * 1.5 = 45)
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25), // top point original
-              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1)  // left point original
+              farLeft.x, farLeft.y  // left point original
             ]}
             closed={true}
             fill="#111133"
             stroke="#222244"
             strokeWidth={1}
             fillLinearGradientStartPoint={{
-              x: (300 * scaleX + (300 * scaleX - (200 * scaleY * 0.585))) / 2,
-              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (200 * scaleY + 200 * scaleY * 0.1 - 45 * scaleY)) / 2,
+              x: (300 * scaleX + farLeft.x) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (farLeft.y - 45 * scaleY)) / 2,
             }}
             fillLinearGradientEndPoint={{
-              x: (300 * scaleX + (300 * scaleX - (200 * scaleY * 0.585))) / 2,
-              y: (100 * scaleY + 200 * scaleY * 0.25 + (200 * scaleY + 200 * scaleY * 0.1)) / 2,
+              x: (300 * scaleX + farLeft.x) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 + farLeft.y) / 2,
             }}
             fillLinearGradientColorStops={[0, '#2a2a5a', 0.5, '#15153d', 1, '#0a0a27']}
             shadowEnabled
@@ -577,7 +1024,7 @@ export default function ClubGameInner() {
           <Line
             points={[
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY),
-              300 * scaleX - (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY),
+              farLeft.x, farLeft.y - (45 * scaleY),
             ]}
             stroke="#aab0ff"
             strokeWidth={2 * uiScale}
@@ -592,8 +1039,8 @@ export default function ClubGameInner() {
           <Line
             points={[
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY), // top point raised with scaling (30 * 1.5 = 45)
-              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY), // right point raised with scaling (30 * 1.5 = 45)
-              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1), // right point original
+              farRight.x, farRight.y - (45 * scaleY), // right point raised with scaling (30 * 1.5 = 45)
+              farRight.x, farRight.y, // right point original
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25)  // top point original
             ]}
             closed={true}
@@ -601,12 +1048,12 @@ export default function ClubGameInner() {
             stroke="#222244"
             strokeWidth={1}
             fillLinearGradientStartPoint={{
-              x: (300 * scaleX + (300 * scaleX + 200 * scaleY * 0.585)) / 2,
-              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (200 * scaleY + 200 * scaleY * 0.1 - 45 * scaleY)) / 2,
+              x: (300 * scaleX + farRight.x) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 - 45 * scaleY + (farRight.y - 45 * scaleY)) / 2,
             }}
             fillLinearGradientEndPoint={{
-              x: (300 * scaleX + (300 * scaleX + 200 * scaleY * 0.585)) / 2,
-              y: (100 * scaleY + 200 * scaleY * 0.25 + (200 * scaleY + 200 * scaleY * 0.1)) / 2,
+              x: (300 * scaleX + farRight.x) / 2,
+              y: (100 * scaleY + 200 * scaleY * 0.25 + farRight.y) / 2,
             }}
             fillLinearGradientColorStops={[0, '#2a2a5a', 0.5, '#15153d', 1, '#0a0a27']}
             shadowEnabled
@@ -619,7 +1066,7 @@ export default function ClubGameInner() {
           <Line
             points={[
               300 * scaleX, 100 * scaleY + (200 * scaleY * 0.25) - (45 * scaleY),
-              300 * scaleX + (200 * scaleY * 0.585), 200 * scaleY + (200 * scaleY * 0.1) - (45 * scaleY),
+              farRight.x, farRight.y - (45 * scaleY),
             ]}
             stroke="#aab0ff"
             strokeWidth={2 * uiScale}
