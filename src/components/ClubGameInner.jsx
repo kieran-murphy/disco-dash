@@ -2,16 +2,10 @@
 import { Stage, Layer, Rect, Line, Image as KonvaImage } from "react-konva";
 import { useEffect, useRef, useState } from "react";
 
-// Picks a random spot on the dance floor that isn't too close to anyone in `otherPositions`.
-// Stops at the first candidate that clears minDistance (rather than searching for the single best
-// one) so different dancers deciding around the same time don't all converge on the same "most
-// isolated" spot — that greedy-maximization approach was tried and reliably produced a single
-// pileup at whichever corner was farthest from the crowd. Falls back to the roomiest, least-crowded
-// candidate found if nothing clears the threshold within the attempt budget.
-function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
-  // Scale the roaming diamond by the same factor the dance floor's tile grid and back walls are
-  // extended by (see maxSteps/farLeft/farRight below), so dancers use the whole rendered floor
-  // instead of just the original small diamond.
+// Shared footprint for wherever dancers are allowed to roam: scales the original small diamond by
+// the same factor the dance floor's tile grid and back walls are extended by (see maxSteps below),
+// so dancers use the whole rendered floor instead of just the original small diamond.
+function getRoamBounds() {
   const gridScaleFactor = 0.125;
   const gridMaxSteps = Math.floor(1 / gridScaleFactor) + 1;
   const extendedMultiplier = gridScaleFactor * (gridMaxSteps + 1);
@@ -22,6 +16,31 @@ function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
   const maxHeight = 200 * 0.7 * extendedMultiplier;
   const centerY = topY + maxHeight / 2;
   const margin = 20;
+
+  return { centerX, centerY, maxWidth, maxHeight, margin };
+}
+
+// Pulls (x, y) back inside the roaming diamond if it's drifted outside — there's no wall on the
+// bottom/left/right sides the way there is at the back, so nothing else stops a dancer who's been
+// pushed by applySeparation from sliding off the edge of the floor and getting stranded there.
+function clampToRoamBounds(x, y) {
+  const { centerX, centerY, maxWidth, maxHeight, margin } = getRoamBounds();
+  const halfHeight = maxHeight / 2 - margin;
+  const clampedY = Math.min(Math.max(y, centerY - halfHeight), centerY + halfHeight);
+  const widthAtY = Math.max(maxWidth * (1 - Math.abs(clampedY - centerY) / (maxHeight / 2)), margin * 2);
+  const halfWidth = widthAtY / 2 - margin;
+  const clampedX = Math.min(Math.max(x, centerX - halfWidth), centerX + halfWidth);
+  return { x: clampedX, y: clampedY };
+}
+
+// Picks a random spot on the dance floor that isn't too close to anyone in `otherPositions`.
+// Stops at the first candidate that clears minDistance (rather than searching for the single best
+// one) so different dancers deciding around the same time don't all converge on the same "most
+// isolated" spot — that greedy-maximization approach was tried and reliably produced a single
+// pileup at whichever corner was farthest from the crowd. Falls back to the roomiest, least-crowded
+// candidate found if nothing clears the threshold within the attempt budget.
+function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
+  const { centerX, centerY, maxWidth, maxHeight, margin } = getRoamBounds();
 
   let bestCandidate = null;
   let bestScore = -Infinity;
@@ -54,7 +73,9 @@ function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
 
 // Nudges (x, y) away from any position in `otherPositions` that's closer than minSeparation,
 // applied every movement tick so dancers deflect off each other mid-transit instead of walking
-// straight through — a soft "bounce" rather than a hard collision.
+// straight through — a soft "bounce" rather than a hard collision. The total nudge is capped so a
+// crowd of close neighbors can't overpower the walk toward the target, and the result is clamped
+// back onto the floor so repeated nudges can't push a dancer off the edge and strand them there.
 function applySeparation(x, y, otherPositions, minSeparation = 30) {
   let pushX = 0;
   let pushY = 0;
@@ -68,7 +89,15 @@ function applySeparation(x, y, otherPositions, minSeparation = 30) {
       pushY += (dy / dist) * strength;
     }
   }
-  return { x: x + pushX * 2, y: y + pushY * 2 };
+
+  const pushMag = Math.hypot(pushX, pushY);
+  const maxPush = 1;
+  if (pushMag > maxPush) {
+    pushX = (pushX / pushMag) * maxPush;
+    pushY = (pushY / pushMag) * maxPush;
+  }
+
+  return clampToRoamBounds(x + pushX, y + pushY);
 }
 
 export default function ClubGameInner() {
