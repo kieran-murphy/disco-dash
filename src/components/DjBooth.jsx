@@ -11,6 +11,7 @@ import {
   EQUIPMENT_BODY_COLORS,
   EQUIPMENT_DARK_COLORS,
 } from "./isoDrawing";
+import Speaker from "./Speaker";
 
 // How far into the floor the booth's arms reach (tile-grid j units, back-tip reference
 // frame) — ClubGameInner uses this to keep dancers from wandering into it.
@@ -22,12 +23,16 @@ export const DJ_BOOTH_BACK_LIMIT = 214;
 // solid arms, decks on the desk, with two speaker stacks flanking the whole booth.
 export default function DjBooth({ g, sx, sy, uiScale, djImage, djBounce = 0 }) {
   return (
-    <Shape
-      listening={false}
-      sceneFunc={(ctx) => {
-        drawDjBooth(ctx, g, sx, sy, uiScale, djImage, djBounce);
-      }}
-    />
+    <>
+      <Shape
+        listening={false}
+        sceneFunc={(ctx) => {
+          drawDjBooth(ctx, g, sx, sy, uiScale, djImage, djBounce);
+        }}
+      />
+      <Speaker g={g} i={3.6} j={0.18} sy={sy} />
+      <Speaker g={g} i={0.18} j={3.6} sy={sy} />
+    </>
   );
 }
 
@@ -97,36 +102,4 @@ function drawDjBooth(ctx, g, sx, sy, uiScale, djImage, djBounce) {
     );
     ctx.restore();
   });
-
-  // Speaker stacks flanking the booth.
-  const speaker = (i, j) => {
-    const lowH = 25 * sy;
-    const topH = 16 * sy;
-    const low = isoBox(ctx, g, i, j, 1.05, 1.05, lowH, EQUIPMENT_BODY_COLORS);
-    const up = isoBox(ctx, g, i + 0.08, j + 0.08, 0.89, 0.89, topH, EQUIPMENT_DARK_COLORS, lowH);
-    const cone = (cx, cy, ry) => {
-      ctx.save();
-      ctx.fillStyle = "#121224";
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, 5.4 * sx, ry, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#4a4a70";
-      ctx.lineWidth = 1 * uiScale;
-      ctx.stroke();
-      ctx.restore();
-    };
-    cone(low.C.x, low.C.y + lowH * 0.4, 5.4 * sy);
-    cone(low.C.x, low.C.y + lowH * 0.76, 3.6 * sy);
-    cone(up.C.x, up.C.y + topH * 0.48, 3.4 * sy);
-    ctx.save();
-    ctx.fillStyle = neon2;
-    ctx.shadowColor = neon2;
-    ctx.shadowBlur = 8 * uiScale;
-    ctx.beginPath();
-    ctx.arc(up.C.x, up.C.y + topH * 0.16, 1.5 * uiScale, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  };
-  speaker(3.6, 0.18);
-  speaker(0.18, 3.6);
 }

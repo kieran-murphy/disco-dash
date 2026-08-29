@@ -104,6 +104,23 @@ export function isoLBox(ctx, g, i0, j0, full, arm, h, colors, lift = 0) {
   };
 }
 
+// Draws something (via `draw`, called with the canvas transformed so a unit circle at the
+// origin exactly covers it) embedded flush on a vertical box face — the face spanned by its
+// ground edge (b0 -> b1, already projected to screen space by isoBox/gridPt) and a purely
+// vertical height axis of length h. u/v (0..1) place the shape's center along the face (u
+// across the ground edge, v up from its base); r sizes it as a single fraction of both edge
+// lengths, so a circle drawn by `draw` comes out as a true circle-on-a-plane foreshortened by
+// the ground edge's iso slant, rather than a flat, unskewed shape floating over the face.
+export function isoOnFace(ctx, b0, b1, h, u, v, r, draw) {
+  const ex = b1.x - b0.x;
+  const ey = b1.y - b0.y;
+  ctx.save();
+  ctx.translate(b0.x + ex * u, b0.y + ey * u - h * v);
+  ctx.transform(ex * r, ey * r, 0, -h * r, 0, 0);
+  draw(ctx);
+  ctx.restore();
+}
+
 export function neonStrip(ctx, from, to, color, width, alpha, uiScale) {
   ctx.save();
   ctx.globalAlpha = alpha;

@@ -118,15 +118,17 @@ export default function ClubGameInner() {
   const [sprite3bImage, setSprite3bImage] = useState(null);
   const [sprite3cImage, setSprite3cImage] = useState(null);
   
-  const [characterPos, setCharacterPos] = useState({ x: 300, y: 200 });
-  const [character1bPos, setCharacter1bPos] = useState({ x: 250, y: 180 });
+  // y values below DJ_BOOTH_BACK_LIMIT (214) land inside the DJ booth/bar footprint at the
+  // back of the floor, so every spawn (and matching initial target below) stays under it.
+  const [characterPos, setCharacterPos] = useState({ x: 300, y: 245 });
+  const [character1bPos, setCharacter1bPos] = useState({ x: 250, y: 265 });
   const [character1cPos, setCharacter1cPos] = useState({ x: 350, y: 220 });
   const [character2Pos, setCharacter2Pos] = useState({ x: 280, y: 240 });
-  const [character2bPos, setCharacter2bPos] = useState({ x: 320, y: 160 });
-  const [character2cPos, setCharacter2cPos] = useState({ x: 240, y: 200 });
-  const [character2dPos, setCharacter2dPos] = useState({ x: 360, y: 200 });
+  const [character2bPos, setCharacter2bPos] = useState({ x: 320, y: 235 });
+  const [character2cPos, setCharacter2cPos] = useState({ x: 240, y: 260 });
+  const [character2dPos, setCharacter2dPos] = useState({ x: 360, y: 270 });
   const [character3bPos, setCharacter3bPos] = useState({ x: 260, y: 240 });
-  const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 180 });
+  const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 255 });
 
   // Live mirror of every dancer's position, kept in a ref so any dancer's movement effect
   // can read everyone else's current spot without going stale between its own re-runs.
@@ -166,15 +168,15 @@ export default function ClubGameInner() {
   const [isMoving3b, setIsMoving3b] = useState(false);
   const [isMoving3c, setIsMoving3c] = useState(false);
   
-  const [targetPos, setTargetPos] = useState({ x: 300, y: 200 });
-  const [targetPos1b, setTargetPos1b] = useState({ x: 250, y: 180 });
+  const [targetPos, setTargetPos] = useState({ x: 300, y: 245 });
+  const [targetPos1b, setTargetPos1b] = useState({ x: 250, y: 265 });
   const [targetPos1c, setTargetPos1c] = useState({ x: 350, y: 220 });
   const [targetPos2, setTargetPos2] = useState({ x: 280, y: 240 });
-  const [targetPos2b, setTargetPos2b] = useState({ x: 320, y: 160 });
-  const [targetPos2c, setTargetPos2c] = useState({ x: 240, y: 200 });
-  const [targetPos2d, setTargetPos2d] = useState({ x: 360, y: 200 });
+  const [targetPos2b, setTargetPos2b] = useState({ x: 320, y: 235 });
+  const [targetPos2c, setTargetPos2c] = useState({ x: 240, y: 260 });
+  const [targetPos2d, setTargetPos2d] = useState({ x: 360, y: 270 });
   const [targetPos3b, setTargetPos3b] = useState({ x: 260, y: 240 });
-  const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 180 });
+  const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 255 });
   
   // Staggered starting offsets so all 10 dancers don't begin their first dance cycle in lockstep.
   const [danceTimer, setDanceTimer] = useState(0);
