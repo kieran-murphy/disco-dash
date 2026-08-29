@@ -192,9 +192,7 @@ export default function ClubGameInner() {
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
     const updateDimensions = () => {
-      const width = Math.floor(window.innerWidth * 0.8);
-      const height = Math.floor(window.innerHeight * 0.8);
-      setDimensions({ width, height });
+      setDimensions({ width: window.innerWidth, height: window.innerHeight });
     };
 
     updateDimensions();
