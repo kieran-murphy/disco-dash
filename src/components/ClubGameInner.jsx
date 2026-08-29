@@ -1,8 +1,25 @@
 "use client";
-import { Stage, Layer, Rect, Line, Image as KonvaImage } from "react-konva";
+import { Stage, Layer, Group, Rect, Line, Text, Image as KonvaImage } from "react-konva";
 import { useEffect, useRef, useState } from "react";
 import DjBooth, { DJ_BOOTH_BACK_LIMIT } from "./DjBooth";
 import Bar from "./Bar";
+import StatsHud from "./StatsHud";
+
+// Every roaming character is a potential customer (the DJ and bartender are staff, not
+// patrons) — 9 of them, so that's the floor's capacity. They start at 0 and arrive one at a
+// time up to that cap. Order here is arrival order, and doubles as the lookup key into
+// positionsRef for placing popups.
+const DANCER_KEYS = ["character", "character1b", "character1c", "character2", "character2b", "character2c", "character2d", "character3b", "character3c"];
+const MAX_CUSTOMERS = DANCER_KEYS.length;
+const CUSTOMER_ARRIVAL_MIN_MS = 6000;
+const CUSTOMER_ARRIVAL_MAX_MS = 12000;
+const MONEY_PER_CUSTOMER_PER_TICK = 2;
+const MONEY_TICK_MS = 1000;
+const VIP_POINT_MIN_DELAY_MS = 7500;
+const VIP_POINT_MAX_DELAY_MS = 15000;
+const POPUP_DURATION_MS = 1100;
+const POPUP_BASE_OFFSET = 55; // unscaled reference-frame px above the dancer's head the popup starts at
+const POPUP_RISE = 30; // unscaled reference-frame px the popup floats up over its lifetime, on top of the base offset
 
 // Shared footprint for wherever dancers are allowed to roam: scales the original small diamond by
 // the same factor the dance floor's tile grid and back walls are extended by (see maxSteps below),
@@ -107,6 +124,26 @@ export default function ClubGameInner() {
   const [dancers, setDancers] = useState([]);
   const [lights, setLights] = useState([]);
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
+
+  const [money, setMoney] = useState(0);
+  const [vipPoints, setVipPoints] = useState(0);
+
+  // Customers trickle in one at a time until the floor's full — DANCER_KEYS[i] becomes
+  // visible once `customers` passes i (see the dancer render blocks further down).
+  const [customers, setCustomers] = useState(0);
+  const customersRef = useRef(0);
+  useEffect(() => {
+    customersRef.current = customers;
+  }, [customers]);
+  useEffect(() => {
+    if (customers >= MAX_CUSTOMERS) return;
+    const delay = CUSTOMER_ARRIVAL_MIN_MS + Math.random() * (CUSTOMER_ARRIVAL_MAX_MS - CUSTOMER_ARRIVAL_MIN_MS);
+    const timeoutId = setTimeout(() => {
+      setCustomers((prev) => Math.min(prev + 1, MAX_CUSTOMERS));
+    }, delay);
+    return () => clearTimeout(timeoutId);
+  }, [customers]);
+
   const [sprite1Image, setSprite1Image] = useState(null);
   const [sprite1bImage, setSprite1bImage] = useState(null);
   const [sprite1cImage, setSprite1cImage] = useState(null);
@@ -146,6 +183,62 @@ export default function ClubGameInner() {
       character3c: character3cPos,
     };
   }, [characterPos, character1bPos, character1cPos, character2Pos, character2bPos, character2cPos, character2dPos, character3bPos, character3cPos]);
+
+  // Floating "+N" text that pops up over a random dancer whenever money or VIP points
+  // increase — rendered on the canvas itself (see the Text nodes near the end of the JSX
+  // below) rather than in the StatsHud overlay, so the gain reads as coming from the floor.
+  const [popups, setPopups] = useState([]);
+  const popupIdRef = useRef(0);
+
+  // Only picks among customers who've actually arrived — DANCER_KEYS[0..customers) —
+  // so a gain never pops up over a dancer who isn't on the floor yet.
+  function pickRandomDancerPos() {
+    const arrivedKeys = DANCER_KEYS.slice(0, customersRef.current);
+    if (arrivedKeys.length === 0) return { x: 300, y: 245 };
+    const key = arrivedKeys[Math.floor(Math.random() * arrivedKeys.length)];
+    return positionsRef.current[key] || { x: 300, y: 245 };
+  }
+
+  function spawnPopup(text, pos, color) {
+    const id = ++popupIdRef.current;
+    const spawnTime = Date.now();
+    setPopups((prev) => [...prev.filter((p) => spawnTime - p.spawnTime < POPUP_DURATION_MS), { id, text, x: pos.x, y: pos.y, color, spawnTime }]);
+  }
+
+  // Money trickles in from whoever's on the floor — more customers, more money per tick.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const current = customersRef.current;
+      if (current <= 0) return;
+      const amount = current * MONEY_PER_CUSTOMER_PER_TICK;
+      setMoney((prev) => prev + amount);
+      spawnPopup(`+$${amount}`, pickRandomDancerPos(), "#5fe3ff");
+    }, MONEY_TICK_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  // VIP points trickle in at random intervals, as if a VIP guest just tipped — a fuller
+  // floor means more (and more frequent) chances for someone to tip, scaling the base
+  // delay range down as customers approaches the cap. An empty floor just waits.
+  useEffect(() => {
+    let timeoutId;
+    const scheduleNext = () => {
+      const current = customersRef.current;
+      if (current <= 0) {
+        timeoutId = setTimeout(scheduleNext, 2000);
+        return;
+      }
+      const speedScale = MAX_CUSTOMERS / current;
+      const delay = (VIP_POINT_MIN_DELAY_MS + Math.random() * (VIP_POINT_MAX_DELAY_MS - VIP_POINT_MIN_DELAY_MS)) * speedScale;
+      timeoutId = setTimeout(() => {
+        setVipPoints((prev) => prev + 1);
+        spawnPopup("+1 VIP", pickRandomDancerPos(), "#ff5fd1");
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
+    return () => clearTimeout(timeoutId);
+  }, []);
 
   const [bounceOffset, setBounceOffset] = useState(0);
   const [bounceOffset1b, setBounceOffset1b] = useState(0);
@@ -913,6 +1006,7 @@ export default function ClubGameInner() {
 
   return (
     <div className="flex flex-col items-center">
+      <StatsHud money={money} customers={customers} vipPoints={vipPoints} maxCustomers={MAX_CUSTOMERS} />
       <Stage width={dimensions.width} height={dimensions.height}>
         <Layer>
           {/* Dance floor */}
@@ -1070,306 +1164,355 @@ export default function ClubGameInner() {
           <DjBooth g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} djImage={sprite3aImage} djBounce={bounceOffset3a} />
           <Bar g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} bartenderImage={sprite2cImage} bartenderBounce={bounceOffset2c} />
 
-          {/* Character shadow */}
-          <Rect
-            x={characterPos.x * scaleX - (14 * scaleX)}
-            y={characterPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
+          {/* All characters on diamond - rendered on top. Each is wrapped in a Group so it
+              stays invisible (but still dancing/roaming off-screen) until its turn in
+              DANCER_KEYS' arrival order comes up in `customers`. */}
 
-          {/* All characters on diamond - rendered on top */}
-          
-          {/* Character shadow */}
-          <Rect
-            x={characterPos.x * scaleX - (14 * scaleX)}
-            y={characterPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite1 */}
-          {sprite1Image ? (
-            <KonvaImage
-              image={sprite1Image}
-              x={characterPos.x * scaleX - (16 * scaleX)}
-              y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
+          <Group visible={customers > 0}>
+            {/* Character shadow */}
             <Rect
-              x={characterPos.x * scaleX - (16 * scaleX)}
-              y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#ff0000"
-              opacity={1}
+              x={characterPos.x * scaleX - (14 * scaleX)}
+              y={characterPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset * 0.02)}
+              cornerRadius={14 * scaleX}
             />
-          )}
 
-          {/* Character1b shadow */}
-          <Rect
-            x={character1bPos.x * scaleX - (14 * scaleX)}
-            y={character1bPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset1b * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite1b */}
-          {sprite1bImage ? (
-            <KonvaImage
-              image={sprite1bImage}
-              x={character1bPos.x * scaleX - (16 * scaleX)}
-              y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
-            <Rect
-              x={character1bPos.x * scaleX - (16 * scaleX)}
-              y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#00ff00"
-              opacity={1}
-            />
-          )}
+            {/* Sprite1 */}
+            {sprite1Image ? (
+              <KonvaImage
+                image={sprite1Image}
+                x={characterPos.x * scaleX - (16 * scaleX)}
+                y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={characterPos.x * scaleX - (16 * scaleX)}
+                y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#ff0000"
+                opacity={1}
+              />
+            )}
+          </Group>
 
-          {/* Character1c shadow */}
-          <Rect
-            x={character1cPos.x * scaleX - (14 * scaleX)}
-            y={character1cPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset1c * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite1c */}
-          {sprite1cImage ? (
-            <KonvaImage
-              image={sprite1cImage}
-              x={character1cPos.x * scaleX - (16 * scaleX)}
-              y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
+          <Group visible={customers > 1}>
+            {/* Character1b shadow */}
             <Rect
-              x={character1cPos.x * scaleX - (16 * scaleX)}
-              y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#0000ff"
-              opacity={1}
+              x={character1bPos.x * scaleX - (14 * scaleX)}
+              y={character1bPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset1b * 0.02)}
+              cornerRadius={14 * scaleX}
             />
-          )}
 
-          {/* Character2 shadow */}
-          <Rect
-            x={character2Pos.x * scaleX - (14 * scaleX)}
-            y={character2Pos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset2 * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite2 */}
-          {sprite2Image ? (
-            <KonvaImage
-              image={sprite2Image}
-              x={character2Pos.x * scaleX - (16 * scaleX)}
-              y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
-            <Rect
-              x={character2Pos.x * scaleX - (16 * scaleX)}
-              y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#ffff00"
-              opacity={1}
-            />
-          )}
+            {/* Sprite1b */}
+            {sprite1bImage ? (
+              <KonvaImage
+                image={sprite1bImage}
+                x={character1bPos.x * scaleX - (16 * scaleX)}
+                y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character1bPos.x * scaleX - (16 * scaleX)}
+                y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#00ff00"
+                opacity={1}
+              />
+            )}
+          </Group>
 
-          {/* Character2b shadow */}
-          <Rect
-            x={character2bPos.x * scaleX - (14 * scaleX)}
-            y={character2bPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset2b * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite2b */}
-          {sprite2bImage ? (
-            <KonvaImage
-              image={sprite2bImage}
-              x={character2bPos.x * scaleX - (16 * scaleX)}
-              y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
+          <Group visible={customers > 2}>
+            {/* Character1c shadow */}
             <Rect
-              x={character2bPos.x * scaleX - (16 * scaleX)}
-              y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#ff00ff"
-              opacity={1}
+              x={character1cPos.x * scaleX - (14 * scaleX)}
+              y={character1cPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset1c * 0.02)}
+              cornerRadius={14 * scaleX}
             />
-          )}
 
-          {/* Character2c shadow */}
-          <Rect
-            x={character2cPos.x * scaleX - (14 * scaleX)}
-            y={character2cPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset2c * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite2c */}
-          {sprite2cImage ? (
-            <KonvaImage
-              image={sprite2cImage}
-              x={character2cPos.x * scaleX - (16 * scaleX)}
-              y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
-            <Rect
-              x={character2cPos.x * scaleX - (16 * scaleX)}
-              y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#00ffff"
-              opacity={1}
-            />
-          )}
+            {/* Sprite1c */}
+            {sprite1cImage ? (
+              <KonvaImage
+                image={sprite1cImage}
+                x={character1cPos.x * scaleX - (16 * scaleX)}
+                y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character1cPos.x * scaleX - (16 * scaleX)}
+                y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#0000ff"
+                opacity={1}
+              />
+            )}
+          </Group>
 
-          {/* Character2d shadow */}
-          <Rect
-            x={character2dPos.x * scaleX - (14 * scaleX)}
-            y={character2dPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset2d * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite2d */}
-          {sprite2dImage ? (
-            <KonvaImage
-              image={sprite2dImage}
-              x={character2dPos.x * scaleX - (16 * scaleX)}
-              y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
+          <Group visible={customers > 3}>
+            {/* Character2 shadow */}
             <Rect
-              x={character2dPos.x * scaleX - (16 * scaleX)}
-              y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#ff8800"
-              opacity={1}
+              x={character2Pos.x * scaleX - (14 * scaleX)}
+              y={character2Pos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset2 * 0.02)}
+              cornerRadius={14 * scaleX}
             />
-          )}
 
-          {/* Character3b shadow */}
-          <Rect
-            x={character3bPos.x * scaleX - (14 * scaleX)}
-            y={character3bPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset3b * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite3b */}
-          {sprite3bImage ? (
-            <KonvaImage
-              image={sprite3bImage}
-              x={character3bPos.x * scaleX - (16 * scaleX)}
-              y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
-            <Rect
-              x={character3bPos.x * scaleX - (16 * scaleX)}
-              y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#0088ff"
-              opacity={1}
-            />
-          )}
+            {/* Sprite2 */}
+            {sprite2Image ? (
+              <KonvaImage
+                image={sprite2Image}
+                x={character2Pos.x * scaleX - (16 * scaleX)}
+                y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character2Pos.x * scaleX - (16 * scaleX)}
+                y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#ffff00"
+                opacity={1}
+              />
+            )}
+          </Group>
 
-          {/* Character3c shadow */}
-          <Rect
-            x={character3cPos.x * scaleX - (14 * scaleX)}
-            y={character3cPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset3c * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite3c */}
-          {sprite3cImage ? (
-            <KonvaImage
-              image={sprite3cImage}
-              x={character3cPos.x * scaleX - (16 * scaleX)}
-              y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
+          <Group visible={customers > 4}>
+            {/* Character2b shadow */}
             <Rect
-              x={character3cPos.x * scaleX - (16 * scaleX)}
-              y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#ff0088"
-              opacity={1}
+              x={character2bPos.x * scaleX - (14 * scaleX)}
+              y={character2bPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset2b * 0.02)}
+              cornerRadius={14 * scaleX}
             />
-          )}
+
+            {/* Sprite2b */}
+            {sprite2bImage ? (
+              <KonvaImage
+                image={sprite2bImage}
+                x={character2bPos.x * scaleX - (16 * scaleX)}
+                y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character2bPos.x * scaleX - (16 * scaleX)}
+                y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#ff00ff"
+                opacity={1}
+              />
+            )}
+          </Group>
+
+          <Group visible={customers > 5}>
+            {/* Character2c shadow */}
+            <Rect
+              x={character2cPos.x * scaleX - (14 * scaleX)}
+              y={character2cPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset2c * 0.02)}
+              cornerRadius={14 * scaleX}
+            />
+
+            {/* Sprite2c */}
+            {sprite2cImage ? (
+              <KonvaImage
+                image={sprite2cImage}
+                x={character2cPos.x * scaleX - (16 * scaleX)}
+                y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character2cPos.x * scaleX - (16 * scaleX)}
+                y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#00ffff"
+                opacity={1}
+              />
+            )}
+          </Group>
+
+          <Group visible={customers > 6}>
+            {/* Character2d shadow */}
+            <Rect
+              x={character2dPos.x * scaleX - (14 * scaleX)}
+              y={character2dPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset2d * 0.02)}
+              cornerRadius={14 * scaleX}
+            />
+
+            {/* Sprite2d */}
+            {sprite2dImage ? (
+              <KonvaImage
+                image={sprite2dImage}
+                x={character2dPos.x * scaleX - (16 * scaleX)}
+                y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character2dPos.x * scaleX - (16 * scaleX)}
+                y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#ff8800"
+                opacity={1}
+              />
+            )}
+          </Group>
+
+          <Group visible={customers > 7}>
+            {/* Character3b shadow */}
+            <Rect
+              x={character3bPos.x * scaleX - (14 * scaleX)}
+              y={character3bPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset3b * 0.02)}
+              cornerRadius={14 * scaleX}
+            />
+
+            {/* Sprite3b */}
+            {sprite3bImage ? (
+              <KonvaImage
+                image={sprite3bImage}
+                x={character3bPos.x * scaleX - (16 * scaleX)}
+                y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character3bPos.x * scaleX - (16 * scaleX)}
+                y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#0088ff"
+                opacity={1}
+              />
+            )}
+          </Group>
+
+          <Group visible={customers > 8}>
+            {/* Character3c shadow */}
+            <Rect
+              x={character3cPos.x * scaleX - (14 * scaleX)}
+              y={character3cPos.y * scaleY + (8 * scaleY)}
+              width={28 * scaleX}
+              height={16 * scaleY}
+              fill="#000000"
+              opacity={0.15 - (bounceOffset3c * 0.02)}
+              cornerRadius={14 * scaleX}
+            />
+
+            {/* Sprite3c */}
+            {sprite3cImage ? (
+              <KonvaImage
+                image={sprite3cImage}
+                x={character3cPos.x * scaleX - (16 * scaleX)}
+                y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                opacity={1}
+              />
+            ) : (
+              <Rect
+                x={character3cPos.x * scaleX - (16 * scaleX)}
+                y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
+                width={32 * scaleX}
+                height={32 * scaleY}
+                fill="#ff0088"
+                opacity={1}
+              />
+            )}
+          </Group>
+
+          {/* Money / VIP gain popups, floating up from wherever they were earned, as a
+              small bordered badge rather than bare text. */}
+          {popups.map((p) => {
+            const age = Date.now() - p.spawnTime;
+            if (age > POPUP_DURATION_MS) return null;
+            const t = age / POPUP_DURATION_MS;
+            const badgeW = 10 + p.text.length * 5;
+            const badgeH = 12;
+            const left = p.x - badgeW / 2;
+            const top = p.y - POPUP_BASE_OFFSET - POPUP_RISE * t - badgeH / 2;
+            return (
+              <Group key={p.id} opacity={1 - t} listening={false}>
+                <Rect
+                  x={left * scaleX}
+                  y={top * scaleY}
+                  width={badgeW * scaleX}
+                  height={badgeH * scaleY}
+                  cornerRadius={3 * uiScale}
+                  fill="#15152bdd"
+                  stroke={p.color}
+                  strokeWidth={1 * uiScale}
+                  shadowColor={p.color}
+                  shadowBlur={3 * uiScale}
+                />
+                <Text
+                  text={p.text}
+                  x={left * scaleX}
+                  y={top * scaleY}
+                  width={badgeW * scaleX}
+                  height={badgeH * scaleY}
+                  align="center"
+                  verticalAlign="middle"
+                  fontSize={7.5 * uiScale}
+                  fontStyle="bold"
+                  fill={p.color}
+                />
+              </Group>
+            );
+          })}
 
         </Layer>
       </Stage>

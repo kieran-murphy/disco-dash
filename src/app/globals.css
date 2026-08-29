@@ -29,3 +29,15 @@ html, body {
   height: 100%;
   margin: 0;
 }
+
+/* StatsHud: a brief scale pulse on the number itself whenever a stat increases. */
+@keyframes stat-bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+.animate-stat-bump {
+  display: inline-block;
+  animation: stat-bump 0.4s ease-out;
+}

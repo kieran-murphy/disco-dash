@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "konva": "^9.3.22",
+    "lucide-react": "^1.37.0",
     "next": "15.5.2",
     "pixi.js": "^8.13.1",
     "react": "19.1.0",
