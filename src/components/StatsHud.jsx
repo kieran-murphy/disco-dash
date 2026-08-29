@@ -38,10 +38,30 @@ function StatTile({ label, Icon, value, format }) {
   );
 }
 
+// Button that spends VIP points to trigger VIP mode — see ClubGameInner's buyVipMode. Locked
+// out while one is already active, not just when unaffordable. Styled to match the StatTiles
+// it sits alongside, but interactive, so it needs pointer-events re-enabled since the HUD
+// container it lives in is click-through.
+function VipModeButton({ vipPoints, vipCost, vipModeActive, vipModeRemainingMs, onBuyVip }) {
+  const canAfford = vipPoints >= vipCost;
+  const label = vipModeActive ? `VIP ${Math.ceil(vipModeRemainingMs / 1000)}s` : `Buy VIP (${vipCost})`;
+  return (
+    <button
+      type="button"
+      onClick={onBuyVip}
+      disabled={!canAfford || vipModeActive}
+      className="pointer-events-auto flex items-center gap-2 rounded-xl border border-[#ff5fd1] bg-[#2b1530]/90 px-4 py-2 text-sm font-semibold text-[#ff5fd1] shadow-[0_0_12px_rgba(255,95,209,0.35)] backdrop-blur-sm transition hover:bg-[#3a1c40] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#2b1530]/90"
+    >
+      <Crown className="h-4 w-4" strokeWidth={2} />
+      {label}
+    </button>
+  );
+}
+
 // Overlay HUD showing the club's running stats. The dance floor <Rect> in ClubGameInner is
 // inset 5% from the canvas edges, so this is inset to match — flush with the visible floor
 // panel's top-right corner rather than the canvas's outer (unpainted) edge.
-export default function StatsHud({ money, customers, vipPoints, maxCustomers }) {
+export default function StatsHud({ money, customers, vipPoints, maxCustomers, vipCost, vipModeActive, vipModeRemainingMs, onBuyVip }) {
   const values = { money, customers, vipPoints };
   const formats = { customers: (v) => `${v} / ${maxCustomers}` };
   return (
@@ -49,6 +69,7 @@ export default function StatsHud({ money, customers, vipPoints, maxCustomers }) 
       {STATS.map(({ key, label, Icon, format }) => (
         <StatTile key={key} label={label} Icon={Icon} value={values[key]} format={formats[key] ?? format} />
       ))}
+      <VipModeButton vipPoints={vipPoints} vipCost={vipCost} vipModeActive={vipModeActive} vipModeRemainingMs={vipModeRemainingMs} onBuyVip={onBuyVip} />
     </div>
   );
 }

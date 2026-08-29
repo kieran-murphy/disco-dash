@@ -7,10 +7,30 @@ import StatsHud from "./StatsHud";
 
 // Every roaming character is a potential customer (the DJ and bartender are staff, not
 // patrons) — 9 of them, so that's the floor's capacity. They start at 0 and arrive one at a
-// time up to that cap. Order here is arrival order, and doubles as the lookup key into
-// positionsRef for placing popups.
+// time up to that cap. Order here is arrival order, and doubles as the index into the
+// dancer-state arrays below (position, sprite, bounce, ...) for that dancer.
 const DANCER_KEYS = ["character", "character1b", "character1c", "character2", "character2b", "character2c", "character2d", "character3b", "character3c"];
 const MAX_CUSTOMERS = DANCER_KEYS.length;
+const DANCER_SPRITES = ["sprite1.png", "sprite1b.png", "sprite1c.png", "sprite2.png", "sprite2b.png", "sprite2c.png", "sprite2d.png", "sprite3b.png", "sprite3c.png"];
+const DANCER_FALLBACK_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff", "#ff8800", "#0088ff", "#ff0088"];
+// y values below DJ_BOOTH_BACK_LIMIT (214) land inside the DJ booth/bar footprint at the
+// back of the floor, so every spawn (and matching initial target below) stays under it.
+const DANCER_INITIAL_POSITIONS = [
+  { x: 300, y: 245 },
+  { x: 250, y: 265 },
+  { x: 350, y: 220 },
+  { x: 280, y: 240 },
+  { x: 320, y: 235 },
+  { x: 240, y: 260 },
+  { x: 360, y: 270 },
+  { x: 260, y: 240 },
+  { x: 340, y: 255 },
+];
+// Staggered starting offsets so all 9 dancers don't begin their first dance cycle in lockstep.
+const DANCER_DANCE_TIMER_OFFSETS = [0, 16, 32, 48, 64, 80, 96, 128, 144];
+// The bartender (see <Bar> below) reuses this dancer's sprite rather than loading its own copy.
+const BARTENDER_DANCER_INDEX = DANCER_KEYS.indexOf("character2c");
+
 const CUSTOMER_ARRIVAL_MIN_MS = 6000;
 const CUSTOMER_ARRIVAL_MAX_MS = 12000;
 const MONEY_PER_CUSTOMER_PER_TICK = 2;
@@ -20,6 +40,16 @@ const VIP_POINT_MAX_DELAY_MS = 15000;
 const POPUP_DURATION_MS = 1100;
 const POPUP_BASE_OFFSET = 55; // unscaled reference-frame px above the dancer's head the popup starts at
 const POPUP_RISE = 30; // unscaled reference-frame px the popup floats up over its lifetime, on top of the base offset
+
+// VIP mode: a timed burst bought with VIP points (see GOALS.md). Locked out while one is
+// already active — no re-buying to extend it — and each purchase's cost scales up from the last.
+const VIP_MODE_DURATION_MS = 60000;
+const VIP_MODE_BASE_COST = 3;
+const VIP_MODE_COST_MULTIPLIER = 1.5;
+const VIP_MODE_MONEY_MULTIPLIER = 3;
+const VIP_MODE_ARRIVAL_MULTIPLIER = 2;
+const VIP_TAG_OFFSET_Y = 28; // unscaled reference-frame px above the dancer's head the VIP tag sits at
+const VIP_GLOW_COLOR = "#ffd75f";
 
 // Shared footprint for wherever dancers are allowed to roam: scales the original small diamond by
 // the same factor the dance floor's tile grid and back walls are extended by (see maxSteps below),
@@ -121,68 +151,60 @@ function applySeparation(x, y, otherPositions, minSeparation = 30) {
 }
 
 export default function ClubGameInner() {
-  const [dancers, setDancers] = useState([]);
-  const [lights, setLights] = useState([]);
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
 
   const [money, setMoney] = useState(0);
   const [vipPoints, setVipPoints] = useState(0);
 
   // Customers trickle in one at a time until the floor's full — DANCER_KEYS[i] becomes
-  // visible once `customers` passes i (see the dancer render blocks further down).
+  // visible once `customers` passes i (see the dancer render map further down).
   const [customers, setCustomers] = useState(0);
   const customersRef = useRef(0);
   useEffect(() => {
     customersRef.current = customers;
   }, [customers]);
+
+  // VIP mode: buy with VIP points, see constants above. `vipModeEndTimeRef` mirrors the state
+  // so the money/arrival timers (setInterval/setTimeout callbacks, not tied to render) can read
+  // the live value without going stale between their own re-schedules.
+  const [vipModeEndTime, setVipModeEndTime] = useState(0);
+  const [vipCost, setVipCost] = useState(VIP_MODE_BASE_COST);
+  const [vipDancerIndex, setVipDancerIndex] = useState(null);
+  const vipModeEndTimeRef = useRef(0);
+  useEffect(() => {
+    vipModeEndTimeRef.current = vipModeEndTime;
+  }, [vipModeEndTime]);
+
   useEffect(() => {
     if (customers >= MAX_CUSTOMERS) return;
-    const delay = CUSTOMER_ARRIVAL_MIN_MS + Math.random() * (CUSTOMER_ARRIVAL_MAX_MS - CUSTOMER_ARRIVAL_MIN_MS);
+    const baseDelay = CUSTOMER_ARRIVAL_MIN_MS + Math.random() * (CUSTOMER_ARRIVAL_MAX_MS - CUSTOMER_ARRIVAL_MIN_MS);
+    const active = vipModeEndTimeRef.current > Date.now();
+    const delay = active ? baseDelay / VIP_MODE_ARRIVAL_MULTIPLIER : baseDelay;
     const timeoutId = setTimeout(() => {
       setCustomers((prev) => Math.min(prev + 1, MAX_CUSTOMERS));
     }, delay);
     return () => clearTimeout(timeoutId);
   }, [customers]);
 
-  const [sprite1Image, setSprite1Image] = useState(null);
-  const [sprite1bImage, setSprite1bImage] = useState(null);
-  const [sprite1cImage, setSprite1cImage] = useState(null);
-  const [sprite2Image, setSprite2Image] = useState(null);
-  const [sprite2bImage, setSprite2bImage] = useState(null);
-  const [sprite2cImage, setSprite2cImage] = useState(null);
-  const [sprite2dImage, setSprite2dImage] = useState(null);
-  const [sprite3aImage, setSprite3aImage] = useState(null);
-  const [sprite3bImage, setSprite3bImage] = useState(null);
-  const [sprite3cImage, setSprite3cImage] = useState(null);
-  
-  // y values below DJ_BOOTH_BACK_LIMIT (214) land inside the DJ booth/bar footprint at the
-  // back of the floor, so every spawn (and matching initial target below) stays under it.
-  const [characterPos, setCharacterPos] = useState({ x: 300, y: 245 });
-  const [character1bPos, setCharacter1bPos] = useState({ x: 250, y: 265 });
-  const [character1cPos, setCharacter1cPos] = useState({ x: 350, y: 220 });
-  const [character2Pos, setCharacter2Pos] = useState({ x: 280, y: 240 });
-  const [character2bPos, setCharacter2bPos] = useState({ x: 320, y: 235 });
-  const [character2cPos, setCharacter2cPos] = useState({ x: 240, y: 260 });
-  const [character2dPos, setCharacter2dPos] = useState({ x: 360, y: 270 });
-  const [character3bPos, setCharacter3bPos] = useState({ x: 260, y: 240 });
-  const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 255 });
+  // Per-dancer sprite images, keyed by the same index as DANCER_KEYS.
+  const [dancerImages, setDancerImages] = useState(() => DANCER_KEYS.map(() => null));
+  const [djImage, setDjImage] = useState(null);
 
-  // Live mirror of every dancer's position, kept in a ref so any dancer's movement effect
-  // can read everyone else's current spot without going stale between its own re-runs.
-  const positionsRef = useRef({});
-  useEffect(() => {
-    positionsRef.current = {
-      character: characterPos,
-      character1b: character1bPos,
-      character1c: character1cPos,
-      character2: character2Pos,
-      character2b: character2bPos,
-      character2c: character2cPos,
-      character2d: character2dPos,
-      character3b: character3bPos,
-      character3c: character3cPos,
-    };
-  }, [characterPos, character1bPos, character1cPos, character2Pos, character2bPos, character2cPos, character2dPos, character3bPos, character3cPos]);
+  // Live, mutable per-dancer movement state (position/target/isMoving/danceTimer), updated every
+  // tick by the single movement effect below. `dancerPositions` is the render-facing mirror,
+  // committed once per tick; other effects (popups, VIP pick) read straight from this ref so they
+  // always see the latest position without waiting on a re-render.
+  const dancerStateRef = useRef(
+    DANCER_KEYS.map((_, i) => ({
+      pos: { ...DANCER_INITIAL_POSITIONS[i] },
+      target: { ...DANCER_INITIAL_POSITIONS[i] },
+      isMoving: false,
+      danceTimer: DANCER_DANCE_TIMER_OFFSETS[i],
+    }))
+  );
+  const [dancerPositions, setDancerPositions] = useState(() => DANCER_INITIAL_POSITIONS.map((p) => ({ ...p })));
+  const [dancerBounce, setDancerBounce] = useState(() => DANCER_KEYS.map(() => 0));
+  const [djBounce, setDjBounce] = useState(0);
 
   // Floating "+N" text that pops up over a random dancer whenever money or VIP points
   // increase — rendered on the canvas itself (see the Text nodes near the end of the JSX
@@ -193,10 +215,10 @@ export default function ClubGameInner() {
   // Only picks among customers who've actually arrived — DANCER_KEYS[0..customers) —
   // so a gain never pops up over a dancer who isn't on the floor yet.
   function pickRandomDancerPos() {
-    const arrivedKeys = DANCER_KEYS.slice(0, customersRef.current);
-    if (arrivedKeys.length === 0) return { x: 300, y: 245 };
-    const key = arrivedKeys[Math.floor(Math.random() * arrivedKeys.length)];
-    return positionsRef.current[key] || { x: 300, y: 245 };
+    const arrived = customersRef.current;
+    if (arrived === 0) return DANCER_INITIAL_POSITIONS[0];
+    const idx = Math.floor(Math.random() * arrived);
+    return dancerStateRef.current[idx].pos;
   }
 
   function spawnPopup(text, pos, color) {
@@ -205,12 +227,28 @@ export default function ClubGameInner() {
     setPopups((prev) => [...prev.filter((p) => spawnTime - p.spawnTime < POPUP_DURATION_MS), { id, text, x: pos.x, y: pos.y, color, spawnTime }]);
   }
 
+  // Spends VIP points to trigger VIP mode: multipliers spike and the floor tiles go rainbow for
+  // VIP_MODE_DURATION_MS. Locked out while one is already active — no re-buying to extend/stack.
+  function buyVipMode() {
+    if (vipModeEndTime > Date.now()) return;
+    if (vipPoints < vipCost) return;
+    setVipPoints((prev) => prev - vipCost);
+    setVipCost((prev) => Math.round(prev * VIP_MODE_COST_MULTIPLIER));
+    setVipModeEndTime(Date.now() + VIP_MODE_DURATION_MS);
+    const arrived = customersRef.current;
+    if (arrived > 0) {
+      setVipDancerIndex(Math.floor(Math.random() * arrived));
+    }
+  }
+
   // Money trickles in from whoever's on the floor — more customers, more money per tick.
+  // VIP mode multiplies the per-tick amount while active.
   useEffect(() => {
     const interval = setInterval(() => {
       const current = customersRef.current;
       if (current <= 0) return;
-      const amount = current * MONEY_PER_CUSTOMER_PER_TICK;
+      const active = vipModeEndTimeRef.current > Date.now();
+      const amount = current * MONEY_PER_CUSTOMER_PER_TICK * (active ? VIP_MODE_MONEY_MULTIPLIER : 1);
       setMoney((prev) => prev + amount);
       spawnPopup(`+$${amount}`, pickRandomDancerPos(), "#5fe3ff");
     }, MONEY_TICK_MS);
@@ -240,48 +278,6 @@ export default function ClubGameInner() {
     return () => clearTimeout(timeoutId);
   }, []);
 
-  const [bounceOffset, setBounceOffset] = useState(0);
-  const [bounceOffset1b, setBounceOffset1b] = useState(0);
-  const [bounceOffset1c, setBounceOffset1c] = useState(0);
-  const [bounceOffset2, setBounceOffset2] = useState(0);
-  const [bounceOffset2b, setBounceOffset2b] = useState(0);
-  const [bounceOffset2c, setBounceOffset2c] = useState(0);
-  const [bounceOffset2d, setBounceOffset2d] = useState(0);
-  const [bounceOffset3a, setBounceOffset3a] = useState(0);
-  const [bounceOffset3b, setBounceOffset3b] = useState(0);
-  const [bounceOffset3c, setBounceOffset3c] = useState(0);
-  
-  const [isMoving, setIsMoving] = useState(false);
-  const [isMoving1b, setIsMoving1b] = useState(false);
-  const [isMoving1c, setIsMoving1c] = useState(false);
-  const [isMoving2, setIsMoving2] = useState(false);
-  const [isMoving2b, setIsMoving2b] = useState(false);
-  const [isMoving2c, setIsMoving2c] = useState(false);
-  const [isMoving2d, setIsMoving2d] = useState(false);
-  const [isMoving3b, setIsMoving3b] = useState(false);
-  const [isMoving3c, setIsMoving3c] = useState(false);
-  
-  const [targetPos, setTargetPos] = useState({ x: 300, y: 245 });
-  const [targetPos1b, setTargetPos1b] = useState({ x: 250, y: 265 });
-  const [targetPos1c, setTargetPos1c] = useState({ x: 350, y: 220 });
-  const [targetPos2, setTargetPos2] = useState({ x: 280, y: 240 });
-  const [targetPos2b, setTargetPos2b] = useState({ x: 320, y: 235 });
-  const [targetPos2c, setTargetPos2c] = useState({ x: 240, y: 260 });
-  const [targetPos2d, setTargetPos2d] = useState({ x: 360, y: 270 });
-  const [targetPos3b, setTargetPos3b] = useState({ x: 260, y: 240 });
-  const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 255 });
-  
-  // Staggered starting offsets so all 10 dancers don't begin their first dance cycle in lockstep.
-  const [danceTimer, setDanceTimer] = useState(0);
-  const [danceTimer1b, setDanceTimer1b] = useState(16);
-  const [danceTimer1c, setDanceTimer1c] = useState(32);
-  const [danceTimer2, setDanceTimer2] = useState(48);
-  const [danceTimer2b, setDanceTimer2b] = useState(64);
-  const [danceTimer2c, setDanceTimer2c] = useState(80);
-  const [danceTimer2d, setDanceTimer2d] = useState(96);
-  const [danceTimer3b, setDanceTimer3b] = useState(128);
-  const [danceTimer3c, setDanceTimer3c] = useState(144);
-
   // Calculate canvas dimensions based on viewport
   useEffect(() => {
     const updateDimensions = () => {
@@ -293,566 +289,93 @@ export default function ClubGameInner() {
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
-  // Load all sprite images
+  // Load all sprite images: one per dancer (into dancerImages, indexed like DANCER_KEYS) plus
+  // the DJ's. The bartender doesn't get its own load — it reuses dancerImages[BARTENDER_DANCER_INDEX].
   useEffect(() => {
-    // Load sprite1
-    const img1 = new window.Image();
-    img1.crossOrigin = 'anonymous';
-    img1.onload = () => {
-      console.log('Sprite1 image loaded successfully');
-      setSprite1Image(img1);
-    };
-    img1.onerror = (error) => {
-      console.error('Failed to load sprite1 image:', error);
-    };
-    img1.src = '/images/sprite1.png';
+    DANCER_SPRITES.forEach((filename, i) => {
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        setDancerImages((prev) => {
+          const next = [...prev];
+          next[i] = img;
+          return next;
+        });
+      };
+      img.onerror = (error) => {
+        console.error(`Failed to load ${filename}:`, error);
+      };
+      img.src = `/images/${filename}`;
+    });
 
-    // Load sprite1b
-    const img1b = new window.Image();
-    img1b.crossOrigin = 'anonymous';
-    img1b.onload = () => {
-      console.log('Sprite1b image loaded successfully');
-      setSprite1bImage(img1b);
+    const djImg = new window.Image();
+    djImg.crossOrigin = 'anonymous';
+    djImg.onload = () => setDjImage(djImg);
+    djImg.onerror = (error) => {
+      console.error('Failed to load sprite3a.png:', error);
     };
-    img1b.onerror = (error) => {
-      console.error('Failed to load sprite1b image:', error);
-    };
-    img1b.src = '/images/sprite1b.png';
-
-    // Load sprite1c
-    const img1c = new window.Image();
-    img1c.crossOrigin = 'anonymous';
-    img1c.onload = () => {
-      console.log('Sprite1c image loaded successfully');
-      setSprite1cImage(img1c);
-    };
-    img1c.onerror = (error) => {
-      console.error('Failed to load sprite1c image:', error);
-    };
-    img1c.src = '/images/sprite1c.png';
-
-    // Load sprite2
-    const img2 = new window.Image();
-    img2.crossOrigin = 'anonymous';
-    img2.onload = () => {
-      console.log('Sprite2 image loaded successfully');
-      setSprite2Image(img2);
-    };
-    img2.onerror = (error) => {
-      console.error('Failed to load sprite2 image:', error);
-    };
-    img2.src = '/images/sprite2.png';
-
-    // Load sprite2b
-    const img2b = new window.Image();
-    img2b.crossOrigin = 'anonymous';
-    img2b.onload = () => {
-      console.log('Sprite2b image loaded successfully');
-      setSprite2bImage(img2b);
-    };
-    img2b.onerror = (error) => {
-      console.error('Failed to load sprite2b image:', error);
-    };
-    img2b.src = '/images/sprite2b.png';
-
-    // Load sprite2c
-    const img2c = new window.Image();
-    img2c.crossOrigin = 'anonymous';
-    img2c.onload = () => {
-      console.log('Sprite2c image loaded successfully');
-      setSprite2cImage(img2c);
-    };
-    img2c.onerror = (error) => {
-      console.error('Failed to load sprite2c image:', error);
-    };
-    img2c.src = '/images/sprite2c.png';
-
-    // Load sprite2d
-    const img2d = new window.Image();
-    img2d.crossOrigin = 'anonymous';
-    img2d.onload = () => {
-      console.log('Sprite2d image loaded successfully');
-      setSprite2dImage(img2d);
-    };
-    img2d.onerror = (error) => {
-      console.error('Failed to load sprite2d image:', error);
-    };
-    img2d.src = '/images/sprite2d.png';
-
-    // Load sprite3a
-    const img3a = new window.Image();
-    img3a.crossOrigin = 'anonymous';
-    img3a.onload = () => {
-      console.log('Sprite3a image loaded successfully');
-      setSprite3aImage(img3a);
-    };
-    img3a.onerror = (error) => {
-      console.error('Failed to load sprite3a image:', error);
-    };
-    img3a.src = '/images/sprite3a.png';
-
-    // Load sprite3b
-    const img3b = new window.Image();
-    img3b.crossOrigin = 'anonymous';
-    img3b.onload = () => {
-      console.log('Sprite3b image loaded successfully');
-      setSprite3bImage(img3b);
-    };
-    img3b.onerror = (error) => {
-      console.error('Failed to load sprite3b image:', error);
-    };
-    img3b.src = '/images/sprite3b.png';
-
-    // Load sprite3c
-    const img3c = new window.Image();
-    img3c.crossOrigin = 'anonymous';
-    img3c.onload = () => {
-      console.log('Sprite3c image loaded successfully');
-      setSprite3cImage(img3c);
-    };
-    img3c.onerror = (error) => {
-      console.error('Failed to load sprite3c image:', error);
-    };
-    img3c.src = '/images/sprite3c.png';
+    djImg.src = '/images/sprite3a.png';
   }, []);
 
-
-  // Bouncing animation for all characters
+  // Bouncing animation for all characters (dancers + DJ), each offset in phase so they don't
+  // bounce in lockstep.
   useEffect(() => {
+    let rafId;
     const animate = () => {
       const time = Date.now() * 0.008; // Faster, more snappy
-      
-      setBounceOffset(Math.abs(Math.sin(time)) * 1.5);
-      setBounceOffset1b(Math.abs(Math.sin(time + 0.5)) * 1.5);
-      setBounceOffset1c(Math.abs(Math.sin(time + 1.0)) * 1.5);
-      setBounceOffset2(Math.abs(Math.sin(time + 1.5)) * 1.5);
-      setBounceOffset2b(Math.abs(Math.sin(time + 2.0)) * 1.5);
-      setBounceOffset2c(Math.abs(Math.sin(time + 2.5)) * 1.5);
-      setBounceOffset2d(Math.abs(Math.sin(time + 3.0)) * 1.5);
-      setBounceOffset3a(Math.abs(Math.sin(time + 3.5)) * 1.5);
-      setBounceOffset3b(Math.abs(Math.sin(time + 4.0)) * 1.5);
-      setBounceOffset3c(Math.abs(Math.sin(time + 4.5)) * 1.5);
-      
-      requestAnimationFrame(animate);
+      setDancerBounce(DANCER_KEYS.map((_, i) => Math.abs(Math.sin(time + i * 0.5)) * 1.5));
+      setDjBounce(Math.abs(Math.sin(time + DANCER_KEYS.length * 0.5)) * 1.5);
+      rafId = requestAnimationFrame(animate);
     };
-    animate();
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
-  // Auto movement and dancing
+  // Auto movement and dancing for every dancer, driven off one shared 50ms tick rather than one
+  // effect per dancer. Mutates dancerStateRef in place (each dancer's move only needs everyone
+  // else's latest position, which the ref always has) and commits the positions to render-facing
+  // state once per tick.
   useEffect(() => {
-    const moveAndDance = () => {
-      // If not moving, check if we should start moving to a new location
-      if (!isMoving) {
-        setDanceTimer(prev => {
-          const newTimer = prev + 1;
+    const interval = setInterval(() => {
+      const states = dancerStateRef.current;
+      for (let i = 0; i < states.length; i++) {
+        const s = states[i];
+        if (!s.isMoving) {
+          s.danceTimer += 1;
           // Dance for 2-10 seconds (40-200 frames at 50ms intervals)
           const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving
-
-          if (newTimer >= danceDuration) {
-            // Pick a spot away from where the other dancers currently are
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character')
-              .map(([, pos]) => pos);
-            setTargetPos(pickNonOverlappingTarget(others));
-            setIsMoving(true);
-            return 0; // Reset timer
+          if (s.danceTimer >= danceDuration) {
+            const others = states.filter((_, j) => j !== i).map((o) => o.pos);
+            s.target = pickNonOverlappingTarget(others);
+            s.isMoving = true;
+            s.danceTimer = 0;
           }
-          return newTimer;
-        });
-      } else {
-        // Move towards target
-        setCharacterPos(prevPos => {
+        } else {
           const moveSpeed = 0.5;
-          const dx = targetPos.x - prevPos.x;
-          const dy = targetPos.y - prevPos.y;
+          const dx = s.target.x - s.pos.x;
+          const dy = s.target.y - s.pos.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
 
           if (distance < moveSpeed) {
-            // Reached target, stop moving and start dancing
-            setIsMoving(false);
-            setDanceTimer(0); // Reset dance timer
-            return targetPos;
+            s.pos = s.target;
+            s.isMoving = false;
+            s.danceTimer = 0;
+          } else {
+            const steppedX = s.pos.x + (dx / distance) * moveSpeed;
+            const steppedY = s.pos.y + (dy / distance) * moveSpeed;
+            const others = states.filter((_, j) => j !== i).map((o) => o.pos);
+            s.pos = applySeparation(steppedX, steppedY, others);
           }
-
-          // Move towards target, then deflect off anyone we're brushing past
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
+        }
       }
-    };
-
-    const interval = setInterval(moveAndDance, 50); // Move every 50ms
+      setDancerPositions(states.map((s) => s.pos));
+    }, 50);
     return () => clearInterval(interval);
-  }, [isMoving, targetPos]);
+  }, []);
 
-  // Auto movement and dancing for character1b
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving1b) {
-        setDanceTimer1b(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-          
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character1b')
-              .map(([, pos]) => pos);
-            setTargetPos1b(pickNonOverlappingTarget(others));
-            setIsMoving1b(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter1bPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos1b.x - prevPos.x;
-          const dy = targetPos1b.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving1b(false);
-            setDanceTimer1b(0);
-            return targetPos1b;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character1b')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving1b, targetPos1b]);
-
-  // Auto movement and dancing for character1c
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving1c) {
-        setDanceTimer1c(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character1c')
-              .map(([, pos]) => pos);
-            setTargetPos1c(pickNonOverlappingTarget(others));
-            setIsMoving1c(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter1cPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos1c.x - prevPos.x;
-          const dy = targetPos1c.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving1c(false);
-            setDanceTimer1c(0);
-            return targetPos1c;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character1c')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving1c, targetPos1c]);
-
-  // Auto movement and dancing for character2
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving2) {
-        setDanceTimer2(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character2')
-              .map(([, pos]) => pos);
-            setTargetPos2(pickNonOverlappingTarget(others));
-            setIsMoving2(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter2Pos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos2.x - prevPos.x;
-          const dy = targetPos2.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving2(false);
-            setDanceTimer2(0);
-            return targetPos2;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character2')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving2, targetPos2]);
-
-  // Auto movement and dancing for character2b
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving2b) {
-        setDanceTimer2b(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character2b')
-              .map(([, pos]) => pos);
-            setTargetPos2b(pickNonOverlappingTarget(others));
-            setIsMoving2b(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter2bPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos2b.x - prevPos.x;
-          const dy = targetPos2b.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving2b(false);
-            setDanceTimer2b(0);
-            return targetPos2b;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character2b')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving2b, targetPos2b]);
-
-  // Auto movement and dancing for character2c
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving2c) {
-        setDanceTimer2c(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character2c')
-              .map(([, pos]) => pos);
-            setTargetPos2c(pickNonOverlappingTarget(others));
-            setIsMoving2c(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter2cPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos2c.x - prevPos.x;
-          const dy = targetPos2c.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving2c(false);
-            setDanceTimer2c(0);
-            return targetPos2c;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character2c')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving2c, targetPos2c]);
-
-  // Auto movement and dancing for character2d
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving2d) {
-        setDanceTimer2d(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character2d')
-              .map(([, pos]) => pos);
-            setTargetPos2d(pickNonOverlappingTarget(others));
-            setIsMoving2d(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter2dPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos2d.x - prevPos.x;
-          const dy = targetPos2d.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving2d(false);
-            setDanceTimer2d(0);
-            return targetPos2d;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character2d')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving2d, targetPos2d]);
-
-  // character3a is the DJ: he stays put at his booth-side spot (set once via
-  // useState above) instead of roaming the floor like the other dancers. He still
-  // gets the idle bounce animation below, just no walk-to-target behavior.
-
-  // Auto movement and dancing for character3b
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving3b) {
-        setDanceTimer3b(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character3b')
-              .map(([, pos]) => pos);
-            setTargetPos3b(pickNonOverlappingTarget(others));
-            setIsMoving3b(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter3bPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos3b.x - prevPos.x;
-          const dy = targetPos3b.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving3b(false);
-            setDanceTimer3b(0);
-            return targetPos3b;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character3b')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving3b, targetPos3b]);
-
-  // Auto movement and dancing for character3c
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving3c) {
-        setDanceTimer3c(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character3c')
-              .map(([, pos]) => pos);
-            setTargetPos3c(pickNonOverlappingTarget(others));
-            setIsMoving3c(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter3cPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos3c.x - prevPos.x;
-          const dy = targetPos3c.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving3c(false);
-            setDanceTimer3c(0);
-            return targetPos3c;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character3c')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving3c, targetPos3c]);
-
+  // character3a is the DJ: he stays put at his booth-side spot instead of roaming the floor
+  // like the other dancers. He still gets the idle bounce animation above, just no walk-to-target
+  // behavior — see <DjBooth> below.
 
   // Calculate proportional positions based on canvas size
   const scaleX = dimensions.width / 600;
@@ -961,8 +484,6 @@ export default function ClubGameInner() {
     return v - Math.floor(v);
   }
 
-  
-
   const maxSteps = Math.floor(1 / scaleFactor) + 1; // Add more steps for significantly extended grid
   const tempDiamonds = [];
   for (let k = 0; k <= maxSteps; k++) {
@@ -1004,9 +525,21 @@ export default function ClubGameInner() {
     y: diamondTop.y + baseLeftDelta.y * extendedMultiplier,
   };
 
+  const vipModeActive = vipModeEndTime > Date.now();
+  const vipModeRemainingMs = vipModeActive ? vipModeEndTime - Date.now() : 0;
+
   return (
     <div className="flex flex-col items-center">
-      <StatsHud money={money} customers={customers} vipPoints={vipPoints} maxCustomers={MAX_CUSTOMERS} />
+      <StatsHud
+        money={money}
+        customers={customers}
+        vipPoints={vipPoints}
+        maxCustomers={MAX_CUSTOMERS}
+        vipCost={vipCost}
+        vipModeActive={vipModeActive}
+        vipModeRemainingMs={vipModeRemainingMs}
+        onBuyVip={buyVipMode}
+      />
       <Stage width={dimensions.width} height={dimensions.height}>
         <Layer>
           {/* Dance floor */}
@@ -1042,7 +575,8 @@ export default function ClubGameInner() {
             />
           ))}
 
-          {/* Per-diamond twinkle glow overlays (staggered, more animated) */}
+          {/* Per-diamond twinkle glow overlays (staggered, more animated). During VIP mode the
+              usual bluish-purple twinkle shifts into a shifting rainbow palette instead. */}
           {diamondsGrid.map((d, idx) => {
             const basePhase = rand01FromPoint(d.top) * Math.PI * 2;
             const baseSpeed = 1.2 + rand01FromPoint(d.right) * 1.5; // faster per-tile speeds
@@ -1052,10 +586,13 @@ export default function ClubGameInner() {
             const burst = Math.pow(Math.max(0, Math.cos(burstT * Math.PI * 2)), 3); // sharper peaks
             const wave = (Math.sin(twinkleTime * baseSpeed + basePhase) + 1) / 2; // 0..1
             const pulse = wave * (0.45 + 0.55 * burst); // stronger during bursts
-            const opacity = 0.08 + pulse * 0.3;
-            const blur = 3.2 * Math.min(scaleX, scaleY) * (0.5 + pulse);
+            const opacity = vipModeActive ? 0.2 + pulse * 0.5 : 0.08 + pulse * 0.3;
+            const blur = (vipModeActive ? 5.5 : 3.2) * Math.min(scaleX, scaleY) * (0.5 + pulse);
             const colorShift = 0.8 + 0.2 * rand01FromPoint(d.left);
-            const color = `rgba(${Math.round(191*colorShift)}, ${Math.round(195*colorShift)}, 255, 1)`;
+            const hue = (twinkleTime * 70 + rand01FromPoint(d.top) * 360) % 360;
+            const color = vipModeActive
+              ? `hsla(${hue}, 95%, 68%, 1)`
+              : `rgba(${Math.round(191*colorShift)}, ${Math.round(195*colorShift)}, 255, 1)`;
             return (
               <Line
                 key={`diamond-glow-${idx}`}
@@ -1063,7 +600,7 @@ export default function ClubGameInner() {
                 closed={true}
                 fillEnabled={false}
                 stroke={color}
-                strokeWidth={1.8}
+                strokeWidth={vipModeActive ? 2.6 : 1.8}
                 opacity={opacity}
                 shadowEnabled
                 shadowColor={color}
@@ -1072,7 +609,7 @@ export default function ClubGameInner() {
             );
           })}
 
-          
+
 
           {/* Grid removed */}
 
@@ -1161,318 +698,90 @@ export default function ClubGameInner() {
           />
 
           {/* DJ booth and bar, standing on the tile grid at the back — each its own component */}
-          <DjBooth g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} djImage={sprite3aImage} djBounce={bounceOffset3a} />
-          <Bar g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} bartenderImage={sprite2cImage} bartenderBounce={bounceOffset2c} />
+          <DjBooth g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} djImage={djImage} djBounce={djBounce} />
+          <Bar g={grid} sx={scaleX} sy={scaleY} uiScale={uiScale} bartenderImage={dancerImages[BARTENDER_DANCER_INDEX]} bartenderBounce={dancerBounce[BARTENDER_DANCER_INDEX]} />
 
-          {/* All characters on diamond - rendered on top. Each is wrapped in a Group so it
-              stays invisible (but still dancing/roaming off-screen) until its turn in
-              DANCER_KEYS' arrival order comes up in `customers`. */}
+          {/* All dancers on the diamond — rendered on top, data-driven off DANCER_KEYS so each
+              one stays invisible (but still dancing/roaming off-screen) until its turn in arrival
+              order comes up in `customers`. The one currently picked as VIP (see buyVipMode) gets
+              a glow and a floating "VIP" tag for the burst's duration. */}
+          {DANCER_KEYS.map((key, i) => {
+            const pos = dancerPositions[i];
+            const bounce = dancerBounce[i];
+            const image = dancerImages[i];
+            const isVip = vipModeActive && i === vipDancerIndex;
+            return (
+              <Group key={key} visible={customers > i}>
+                {/* Shadow */}
+                <Rect
+                  x={pos.x * scaleX - (14 * scaleX)}
+                  y={pos.y * scaleY + (8 * scaleY)}
+                  width={28 * scaleX}
+                  height={16 * scaleY}
+                  fill="#000000"
+                  opacity={0.15 - (bounce * 0.02)}
+                  cornerRadius={14 * scaleX}
+                />
 
-          <Group visible={customers > 0}>
-            {/* Character shadow */}
-            <Rect
-              x={characterPos.x * scaleX - (14 * scaleX)}
-              y={characterPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
+                {image ? (
+                  <KonvaImage
+                    image={image}
+                    x={pos.x * scaleX - (16 * scaleX)}
+                    y={(pos.y + bounce) * scaleY - (16 * scaleY)}
+                    width={32 * scaleX}
+                    height={32 * scaleY}
+                    opacity={1}
+                    shadowEnabled={isVip}
+                    shadowColor={VIP_GLOW_COLOR}
+                    shadowBlur={isVip ? 16 * uiScale : 0}
+                    shadowOpacity={isVip ? 0.9 : 0}
+                  />
+                ) : (
+                  <Rect
+                    x={pos.x * scaleX - (16 * scaleX)}
+                    y={(pos.y + bounce) * scaleY - (16 * scaleY)}
+                    width={32 * scaleX}
+                    height={32 * scaleY}
+                    fill={DANCER_FALLBACK_COLORS[i]}
+                    opacity={1}
+                    shadowEnabled={isVip}
+                    shadowColor={VIP_GLOW_COLOR}
+                    shadowBlur={isVip ? 16 * uiScale : 0}
+                    shadowOpacity={isVip ? 0.9 : 0}
+                  />
+                )}
 
-            {/* Sprite1 */}
-            {sprite1Image ? (
-              <KonvaImage
-                image={sprite1Image}
-                x={characterPos.x * scaleX - (16 * scaleX)}
-                y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={characterPos.x * scaleX - (16 * scaleX)}
-                y={(characterPos.y + bounceOffset) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#ff0000"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 1}>
-            {/* Character1b shadow */}
-            <Rect
-              x={character1bPos.x * scaleX - (14 * scaleX)}
-              y={character1bPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset1b * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite1b */}
-            {sprite1bImage ? (
-              <KonvaImage
-                image={sprite1bImage}
-                x={character1bPos.x * scaleX - (16 * scaleX)}
-                y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character1bPos.x * scaleX - (16 * scaleX)}
-                y={(character1bPos.y + bounceOffset1b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#00ff00"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 2}>
-            {/* Character1c shadow */}
-            <Rect
-              x={character1cPos.x * scaleX - (14 * scaleX)}
-              y={character1cPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset1c * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite1c */}
-            {sprite1cImage ? (
-              <KonvaImage
-                image={sprite1cImage}
-                x={character1cPos.x * scaleX - (16 * scaleX)}
-                y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character1cPos.x * scaleX - (16 * scaleX)}
-                y={(character1cPos.y + bounceOffset1c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#0000ff"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 3}>
-            {/* Character2 shadow */}
-            <Rect
-              x={character2Pos.x * scaleX - (14 * scaleX)}
-              y={character2Pos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset2 * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite2 */}
-            {sprite2Image ? (
-              <KonvaImage
-                image={sprite2Image}
-                x={character2Pos.x * scaleX - (16 * scaleX)}
-                y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character2Pos.x * scaleX - (16 * scaleX)}
-                y={(character2Pos.y + bounceOffset2) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#ffff00"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 4}>
-            {/* Character2b shadow */}
-            <Rect
-              x={character2bPos.x * scaleX - (14 * scaleX)}
-              y={character2bPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset2b * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite2b */}
-            {sprite2bImage ? (
-              <KonvaImage
-                image={sprite2bImage}
-                x={character2bPos.x * scaleX - (16 * scaleX)}
-                y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character2bPos.x * scaleX - (16 * scaleX)}
-                y={(character2bPos.y + bounceOffset2b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#ff00ff"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 5}>
-            {/* Character2c shadow */}
-            <Rect
-              x={character2cPos.x * scaleX - (14 * scaleX)}
-              y={character2cPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset2c * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite2c */}
-            {sprite2cImage ? (
-              <KonvaImage
-                image={sprite2cImage}
-                x={character2cPos.x * scaleX - (16 * scaleX)}
-                y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character2cPos.x * scaleX - (16 * scaleX)}
-                y={(character2cPos.y + bounceOffset2c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#00ffff"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 6}>
-            {/* Character2d shadow */}
-            <Rect
-              x={character2dPos.x * scaleX - (14 * scaleX)}
-              y={character2dPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset2d * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite2d */}
-            {sprite2dImage ? (
-              <KonvaImage
-                image={sprite2dImage}
-                x={character2dPos.x * scaleX - (16 * scaleX)}
-                y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character2dPos.x * scaleX - (16 * scaleX)}
-                y={(character2dPos.y + bounceOffset2d) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#ff8800"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 7}>
-            {/* Character3b shadow */}
-            <Rect
-              x={character3bPos.x * scaleX - (14 * scaleX)}
-              y={character3bPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset3b * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite3b */}
-            {sprite3bImage ? (
-              <KonvaImage
-                image={sprite3bImage}
-                x={character3bPos.x * scaleX - (16 * scaleX)}
-                y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character3bPos.x * scaleX - (16 * scaleX)}
-                y={(character3bPos.y + bounceOffset3b) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#0088ff"
-                opacity={1}
-              />
-            )}
-          </Group>
-
-          <Group visible={customers > 8}>
-            {/* Character3c shadow */}
-            <Rect
-              x={character3cPos.x * scaleX - (14 * scaleX)}
-              y={character3cPos.y * scaleY + (8 * scaleY)}
-              width={28 * scaleX}
-              height={16 * scaleY}
-              fill="#000000"
-              opacity={0.15 - (bounceOffset3c * 0.02)}
-              cornerRadius={14 * scaleX}
-            />
-
-            {/* Sprite3c */}
-            {sprite3cImage ? (
-              <KonvaImage
-                image={sprite3cImage}
-                x={character3cPos.x * scaleX - (16 * scaleX)}
-                y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                opacity={1}
-              />
-            ) : (
-              <Rect
-                x={character3cPos.x * scaleX - (16 * scaleX)}
-                y={(character3cPos.y + bounceOffset3c) * scaleY - (16 * scaleY)}
-                width={32 * scaleX}
-                height={32 * scaleY}
-                fill="#ff0088"
-                opacity={1}
-              />
-            )}
-          </Group>
+                {isVip && (
+                  <Group listening={false}>
+                    <Rect
+                      x={pos.x * scaleX - (16 * scaleX)}
+                      y={(pos.y - VIP_TAG_OFFSET_Y) * scaleY}
+                      width={32 * scaleX}
+                      height={13 * scaleY}
+                      cornerRadius={3 * uiScale}
+                      fill="#2b1530dd"
+                      stroke={VIP_GLOW_COLOR}
+                      strokeWidth={1 * uiScale}
+                      shadowColor={VIP_GLOW_COLOR}
+                      shadowBlur={4 * uiScale}
+                    />
+                    <Text
+                      text="VIP"
+                      x={pos.x * scaleX - (16 * scaleX)}
+                      y={(pos.y - VIP_TAG_OFFSET_Y) * scaleY}
+                      width={32 * scaleX}
+                      height={13 * scaleY}
+                      align="center"
+                      verticalAlign="middle"
+                      fontSize={8 * uiScale}
+                      fontStyle="bold"
+                      fill={VIP_GLOW_COLOR}
+                    />
+                  </Group>
+                )}
+              </Group>
+            );
+          })}
 
           {/* Money / VIP gain popups, floating up from wherever they were earned, as a
               small bordered badge rather than bare text. */}
