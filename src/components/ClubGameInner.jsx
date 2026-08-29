@@ -1,6 +1,297 @@
 "use client";
-import { Stage, Layer, Rect, Line, Image as KonvaImage } from "react-konva";
+import { Stage, Layer, Rect, Line, Image as KonvaImage, Shape } from "react-konva";
 import { useEffect, useRef, useState } from "react";
+
+// Grid units (not canvas pixels) for the tile-projection helpers below — matches the
+// scaleFactor used to build the tile diamond grid further down.
+const GRID_SCALE_FACTOR = 0.125;
+// Keeps dancers from wandering into the DJ booth at the back tip of the floor (reference
+// frame Y, same units as characterPos etc.).
+const BACK_LIMIT = 214;
+
+const EQUIPMENT_NEON = "#5fe3ff";
+const EQUIPMENT_NEON_2 = "#ff5fd1";
+const EQUIPMENT_BODY_COLORS = { top: "#3c3c60", right: "#1d1d36", left: "#131328", edge: "#50507a" };
+const EQUIPMENT_DARK_COLORS = { top: "#5a5a86", right: "#262643", left: "#191932", edge: "#6d6d9c" };
+
+// Projects tile-grid coordinates (i = back-right axis, j = back-left axis, k = toward the
+// viewer) to canvas space, using the same axes the tile loop below uses. `g` carries the
+// diamond's top corner plus the three edge deltas (dR/dL/dB) in canvas pixels.
+function gridPt(g, i, j, k = 0) {
+  return {
+    x: g.top.x + g.dR.x * GRID_SCALE_FACTOR * i + g.dL.x * GRID_SCALE_FACTOR * j + g.dB.x * GRID_SCALE_FACTOR * k,
+    y: g.top.y + g.dR.y * GRID_SCALE_FACTOR * i + g.dL.y * GRID_SCALE_FACTOR * j + g.dB.y * GRID_SCALE_FACTOR * k,
+  };
+}
+
+function tracePolygon(ctx, pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+}
+
+// An axis-aligned box standing on the tile grid, drawn as two front faces plus a top.
+function isoBox(ctx, g, i, j, wi, wj, h, colors, lift = 0) {
+  const A = gridPt(g, i, j);
+  const B = gridPt(g, i + wi, j);
+  const C = gridPt(g, i + wi, j + wj);
+  const D = gridPt(g, i, j + wj);
+  const base = (p) => ({ x: p.x, y: p.y - lift });
+  const cap = (p) => ({ x: p.x, y: p.y - lift - h });
+  const faces = [
+    { pts: [base(B), base(C), cap(C), cap(B)], fill: colors.right },
+    { pts: [base(D), base(C), cap(C), cap(D)], fill: colors.left },
+    { pts: [cap(A), cap(B), cap(C), cap(D)], fill: colors.top },
+  ];
+  faces.forEach((f) => {
+    ctx.fillStyle = f.fill;
+    tracePolygon(ctx, f.pts);
+    ctx.fill();
+    if (colors.edge) {
+      ctx.strokeStyle = colors.edge;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  });
+  return { A: cap(A), B: cap(B), C: cap(C), D: cap(D), floorC: base(C), floorB: base(B), floorD: base(D) };
+}
+
+// An L-shaped prism standing on the tile grid: a `full`×`full` square footprint with its
+// near (i0, i0) tip-side corner notched out instead of filled — the two `arm`-wide arms
+// of equal width hug the far edges and meet at an inner elbow, leaving an open, unwalled
+// recess at the tip where something can stand at floor level (pass arm = full / 2 for a
+// symmetric L). Only the two outer arm-end faces are drawn; the notch's own step edges
+// face away from the camera and are never visible, same as isoBox's hidden back faces.
+function isoLBox(ctx, g, i0, j0, full, arm, h, colors, lift = 0) {
+  const outerCorner = gridPt(g, i0 + full, j0 + full);
+  const jFar = gridPt(g, i0, j0 + full);
+  const jStep = gridPt(g, i0, j0 + arm);
+  const notch = gridPt(g, i0 + arm, j0 + arm);
+  const iStep = gridPt(g, i0 + arm, j0);
+  const iNear = gridPt(g, i0 + full, j0);
+
+  const base = (p) => ({ x: p.x, y: p.y - lift });
+  const cap = (p) => ({ x: p.x, y: p.y - lift - h });
+
+  ctx.fillStyle = colors.top;
+  tracePolygon(ctx, [outerCorner, jFar, jStep, notch, iStep, iNear].map(cap));
+  ctx.fill();
+  if (colors.edge) {
+    ctx.strokeStyle = colors.edge;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  const faces = [
+    { from: jFar, to: outerCorner, fill: colors.left },
+    { from: iNear, to: outerCorner, fill: colors.right },
+  ];
+  faces.forEach(({ from, to, fill }) => {
+    ctx.fillStyle = fill;
+    tracePolygon(ctx, [base(from), base(to), cap(to), cap(from)]);
+    ctx.fill();
+    if (colors.edge) {
+      ctx.strokeStyle = colors.edge;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  });
+
+  return {
+    outerCorner: cap(outerCorner),
+    jFar: cap(jFar),
+    jStep: cap(jStep),
+    notch: cap(notch),
+    iStep: cap(iStep),
+    iNear: cap(iNear),
+  };
+}
+
+function neonStrip(ctx, from, to, color, width, alpha, uiScale) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width * uiScale;
+  ctx.lineCap = "round";
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 9 * uiScale;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// DJ booth, speaker stacks and bar, standing on the tile grid behind the dancers' roaming
+// area. The bartender is drawn between furniture layers (on the shelf before the counter)
+// so the counter correctly occludes his lower body; the DJ stands clear of the desk in his
+// own open recess, so no occlusion sandwiching is needed for him.
+function drawClubEquipment(ctx, g, sx, sy, uiScale, djImage, bartenderImage, djBounce = 0, bartenderBounce = 0) {
+  const neon = EQUIPMENT_NEON;
+  const neon2 = EQUIPMENT_NEON_2;
+
+  const staffSprite = (image, at, lift = 0) => {
+    if (!image) return;
+    ctx.drawImage(image, at.x - 15 * sx, at.y - lift - 30 * sy, 30 * sx, 30 * sy);
+  };
+
+  // DJ booth: an L-shaped riser hugging the two back walls, its near/tip-side corner left
+  // open as a floor-level recess — that open notch is the DJ's own one-tile spot, tucked
+  // between the two arms instead of standing on top of them. Desk sits further out on the
+  // solid arms, decks on the desk.
+  const riserH = 11 * sy;
+  const riserFull = 2.8;
+  const riserArm = riserFull / 2; // even sides
+  const riser = isoLBox(ctx, g, 0.35, 0.35, riserFull, riserArm, riserH, EQUIPMENT_BODY_COLORS);
+  neonStrip(ctx, riser.jFar, riser.outerCorner, neon, 2, 0.75, uiScale);
+  neonStrip(ctx, riser.iNear, riser.outerCorner, neon, 2, 0.75, uiScale);
+
+  // The DJ stands at floor level in the open notch (his one-tile spot) — just a gentle
+  // idle bob, no walking.
+  staffSprite(djImage, gridPt(g, 1.05, 1.05), djBounce * sy);
+
+  // Desk sits on the solid arms, out past the elbow, with a margin on both sides.
+  const deskOrigin = 1.95;
+  const deskSize = 1.0;
+  const deskScale = deskSize / 1.7; // relative to the original square desk's decorations
+  const deskH = 9 * sy;
+  const desk = isoBox(ctx, g, deskOrigin, deskOrigin, deskSize, deskSize, deskH, EQUIPMENT_DARK_COLORS, riserH);
+  neonStrip(ctx, desk.D, desk.C, neon2, 2.4, 0.95, uiScale);
+  neonStrip(ctx, desk.C, desk.B, neon2, 2.4, 0.95, uiScale);
+
+  // Two platters and a mixer on the desk surface, scaled down to match the smaller desk.
+  const deskCenter = deskOrigin + deskSize / 2;
+  const deckTop = gridPt(g, deskCenter, deskCenter);
+  const platter = (di, dj) => {
+    const p = gridPt(g, deskCenter + di * deskScale, deskCenter + dj * deskScale);
+    const cy = p.y - riserH - deskH;
+    ctx.save();
+    ctx.fillStyle = "#15152b";
+    ctx.beginPath();
+    ctx.ellipse(p.x, cy, 7.5 * deskScale * sx, 4.2 * deskScale * sy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#aab0ff";
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1.2 * uiScale;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = neon;
+    ctx.beginPath();
+    ctx.ellipse(p.x, cy, 2.1 * deskScale * sx, 1.3 * deskScale * sy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+  platter(-0.45, 0.34);
+  platter(0.34, -0.45);
+  ctx.save();
+  ctx.fillStyle = "#15152b";
+  ctx.beginPath();
+  ctx.ellipse(deckTop.x, deckTop.y - riserH - deskH, 5.4 * deskScale * sx, 3.1 * deskScale * sy, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  [-2.2, 0, 2.2].forEach((off, n) => {
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = n === 1 ? neon2 : neon;
+    ctx.fillRect(
+      deckTop.x + off * deskScale * sx - 0.8 * deskScale * sx,
+      deckTop.y - riserH - deskH - 1.8 * deskScale * sy,
+      1.6 * deskScale * sx,
+      3.6 * deskScale * sy
+    );
+    ctx.restore();
+  });
+
+  // Speaker stacks flanking the booth.
+  const speaker = (i, j) => {
+    const lowH = 25 * sy;
+    const topH = 16 * sy;
+    const low = isoBox(ctx, g, i, j, 1.05, 1.05, lowH, EQUIPMENT_BODY_COLORS);
+    const up = isoBox(ctx, g, i + 0.08, j + 0.08, 0.89, 0.89, topH, EQUIPMENT_DARK_COLORS, lowH);
+    const cone = (cx, cy, ry) => {
+      ctx.save();
+      ctx.fillStyle = "#121224";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 5.4 * sx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#4a4a70";
+      ctx.lineWidth = 1 * uiScale;
+      ctx.stroke();
+      ctx.restore();
+    };
+    cone(low.C.x, low.C.y + lowH * 0.4, 5.4 * sy);
+    cone(low.C.x, low.C.y + lowH * 0.76, 3.6 * sy);
+    cone(up.C.x, up.C.y + topH * 0.48, 3.4 * sy);
+    ctx.save();
+    ctx.fillStyle = neon2;
+    ctx.shadowColor = neon2;
+    ctx.shadowBlur = 8 * uiScale;
+    ctx.beginPath();
+    ctx.arc(up.C.x, up.C.y + topH * 0.16, 1.5 * uiScale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+  speaker(3.6, 0.18);
+  speaker(0.18, 3.6);
+
+  // Bar along the back-right wall: bottle shelf, counter, taps and stools.
+  const shelfH = 28 * sy;
+  const shelf = isoBox(ctx, g, 5.9, 0.06, 2.6, 0.36, shelfH, { top: "#2e2e56", right: "#191932", left: "#121226", edge: "#3f3f6b" });
+  ctx.save();
+  const bottleCols = [neon, neon2, "#f5c95c", "#aab0ff", neon, "#f5c95c"];
+  for (let row = 0; row < 2; row++) {
+    for (let n = 0; n < 6; n++) {
+      const p = gridPt(g, 6.08 + n * 0.42, 0.22);
+      const bh = (5.5 + (n % 3) * 1.8) * sy;
+      const by = p.y - shelfH * (row === 0 ? 0.66 : 0.3);
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = bottleCols[(n + row * 2) % bottleCols.length];
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = 7 * uiScale;
+      ctx.fillRect(p.x - 1.5 * sx, by - bh, 3 * sx, bh);
+    }
+  }
+  ctx.restore();
+  neonStrip(ctx, { x: shelf.D.x, y: shelf.D.y }, { x: shelf.C.x, y: shelf.C.y }, neon, 1.6, 0.5, uiScale);
+
+  // Counter sits a bit further out from the shelf than a bare fit needs, so the
+  // bartender has some breathing room to stand in between.
+  const barGap = 0.28;
+  staffSprite(bartenderImage, gridPt(g, 7.1, 0.68), 4 * sy + bartenderBounce * sy);
+
+  const counterH = 14 * sy;
+  const counter = isoBox(ctx, g, 5.8, 0.72 + barGap, 2.8, 1.1, counterH, { top: "#75759f", right: "#22223d", left: "#17172e", edge: "#8b8bb4" });
+  neonStrip(ctx, counter.D, counter.C, neon2, 2.6, 0.95, uiScale);
+  neonStrip(ctx, counter.C, counter.B, neon2, 2.6, 0.95, uiScale);
+  neonStrip(ctx, counter.floorD, counter.floorC, neon2, 3.2, 0.28, uiScale);
+  // Stools on the floor side.
+  [0.6, 1.5, 2.4].forEach((off) => {
+    const p = gridPt(g, 5.8 + off, 2.25 + barGap);
+    const h = 9.5 * sy;
+    ctx.save();
+    ctx.fillStyle = "#000";
+    ctx.globalAlpha = 0.16;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y + 2 * sy, 5 * sx, 2.6 * sy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#3d3d5e";
+    ctx.lineWidth = 1.6 * uiScale;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x, p.y - h);
+    ctx.stroke();
+    ctx.fillStyle = "#3f3f63";
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y - h, 4.8 * sx, 2.6 * sy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#5a5a86";
+    ctx.lineWidth = 1 * uiScale;
+    ctx.stroke();
+    ctx.restore();
+  });
+}
 
 // Shared footprint for wherever dancers are allowed to roam: scales the original small diamond by
 // the same factor the dance floor's tile grid and back walls are extended by (see maxSteps below),
@@ -26,7 +317,7 @@ function getRoamBounds() {
 function clampToRoamBounds(x, y) {
   const { centerX, centerY, maxWidth, maxHeight, margin } = getRoamBounds();
   const halfHeight = maxHeight / 2 - margin;
-  const clampedY = Math.min(Math.max(y, centerY - halfHeight), centerY + halfHeight);
+  const clampedY = Math.min(Math.max(y, Math.max(centerY - halfHeight, BACK_LIMIT)), centerY + halfHeight);
   const widthAtY = Math.max(maxWidth * (1 - Math.abs(clampedY - centerY) / (maxHeight / 2)), margin * 2);
   const halfWidth = widthAtY / 2 - margin;
   const clampedX = Math.min(Math.max(x, centerX - halfWidth), centerX + halfWidth);
@@ -47,6 +338,7 @@ function pickNonOverlappingTarget(otherPositions, minDistance = 28) {
 
   for (let attempt = 0; attempt < 20; attempt++) {
     const randomY = centerY - (maxHeight / 2 - margin) + Math.random() * (maxHeight - margin * 2);
+    if (randomY < BACK_LIMIT) continue; // don't send dancers wandering into the DJ booth
     const diamondWidthAtY = maxWidth * (1 - Math.abs(randomY - centerY) / (maxHeight / 2));
     if (diamondWidthAtY < margin * 2) continue; // too narrow near the diamond's tips to place a character
     const randomX = centerX - (diamondWidthAtY / 2 - margin) + Math.random() * (diamondWidthAtY - margin * 2);
@@ -122,7 +414,6 @@ export default function ClubGameInner() {
   const [character2bPos, setCharacter2bPos] = useState({ x: 320, y: 160 });
   const [character2cPos, setCharacter2cPos] = useState({ x: 240, y: 200 });
   const [character2dPos, setCharacter2dPos] = useState({ x: 360, y: 200 });
-  const [character3aPos, setCharacter3aPos] = useState({ x: 300, y: 160 });
   const [character3bPos, setCharacter3bPos] = useState({ x: 260, y: 240 });
   const [character3cPos, setCharacter3cPos] = useState({ x: 340, y: 180 });
 
@@ -138,11 +429,10 @@ export default function ClubGameInner() {
       character2b: character2bPos,
       character2c: character2cPos,
       character2d: character2dPos,
-      character3a: character3aPos,
       character3b: character3bPos,
       character3c: character3cPos,
     };
-  }, [characterPos, character1bPos, character1cPos, character2Pos, character2bPos, character2cPos, character2dPos, character3aPos, character3bPos, character3cPos]);
+  }, [characterPos, character1bPos, character1cPos, character2Pos, character2bPos, character2cPos, character2dPos, character3bPos, character3cPos]);
 
   const [bounceOffset, setBounceOffset] = useState(0);
   const [bounceOffset1b, setBounceOffset1b] = useState(0);
@@ -162,7 +452,6 @@ export default function ClubGameInner() {
   const [isMoving2b, setIsMoving2b] = useState(false);
   const [isMoving2c, setIsMoving2c] = useState(false);
   const [isMoving2d, setIsMoving2d] = useState(false);
-  const [isMoving3a, setIsMoving3a] = useState(false);
   const [isMoving3b, setIsMoving3b] = useState(false);
   const [isMoving3c, setIsMoving3c] = useState(false);
   
@@ -173,7 +462,6 @@ export default function ClubGameInner() {
   const [targetPos2b, setTargetPos2b] = useState({ x: 320, y: 160 });
   const [targetPos2c, setTargetPos2c] = useState({ x: 240, y: 200 });
   const [targetPos2d, setTargetPos2d] = useState({ x: 360, y: 200 });
-  const [targetPos3a, setTargetPos3a] = useState({ x: 300, y: 160 });
   const [targetPos3b, setTargetPos3b] = useState({ x: 260, y: 240 });
   const [targetPos3c, setTargetPos3c] = useState({ x: 340, y: 180 });
   
@@ -185,7 +473,6 @@ export default function ClubGameInner() {
   const [danceTimer2b, setDanceTimer2b] = useState(64);
   const [danceTimer2c, setDanceTimer2c] = useState(80);
   const [danceTimer2d, setDanceTimer2d] = useState(96);
-  const [danceTimer3a, setDanceTimer3a] = useState(112);
   const [danceTimer3b, setDanceTimer3b] = useState(128);
   const [danceTimer3c, setDanceTimer3c] = useState(144);
 
@@ -668,50 +955,9 @@ export default function ClubGameInner() {
     return () => clearInterval(interval);
   }, [isMoving2d, targetPos2d]);
 
-  // Auto movement and dancing for character3a
-  useEffect(() => {
-    const moveAndDance = () => {
-      if (!isMoving3a) {
-        setDanceTimer3a(prev => {
-          const newTimer = prev + 1;
-          const danceDuration = 150 + Math.random() * 300; // 7.5-22.5s, dancing far more than moving // 2-10s, wide range so dancers desync over time
-
-          if (newTimer >= danceDuration) {
-            const others = Object.entries(positionsRef.current)
-              .filter(([key]) => key !== 'character3a')
-              .map(([, pos]) => pos);
-            setTargetPos3a(pickNonOverlappingTarget(others));
-            setIsMoving3a(true);
-            return 0;
-          }
-          return newTimer;
-        });
-      } else {
-        setCharacter3aPos(prevPos => {
-          const moveSpeed = 0.5;
-          const dx = targetPos3a.x - prevPos.x;
-          const dy = targetPos3a.y - prevPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < moveSpeed) {
-            setIsMoving3a(false);
-            setDanceTimer3a(0);
-            return targetPos3a;
-          }
-
-          const steppedX = prevPos.x + (dx / distance) * moveSpeed;
-          const steppedY = prevPos.y + (dy / distance) * moveSpeed;
-          const others = Object.entries(positionsRef.current)
-            .filter(([key]) => key !== 'character3a')
-            .map(([, pos]) => pos);
-          return applySeparation(steppedX, steppedY, others);
-        });
-      }
-    };
-
-    const interval = setInterval(moveAndDance, 50);
-    return () => clearInterval(interval);
-  }, [isMoving3a, targetPos3a]);
+  // character3a is the DJ: he stays put at his booth-side spot (set once via
+  // useState above) instead of roaming the floor like the other dancers. He still
+  // gets the idle bounce animation below, just no walk-to-target behavior.
 
   // Auto movement and dancing for character3b
   useEffect(() => {
@@ -851,6 +1097,9 @@ export default function ClubGameInner() {
   const baseRightDelta = { x: baseRight.x - diamondTop.x, y: baseRight.y - diamondTop.y };
   const baseBottomDelta = { x: baseBottom.x - diamondTop.x, y: baseBottom.y - diamondTop.y };
   const baseLeftDelta = { x: baseLeft.x - diamondTop.x, y: baseLeft.y - diamondTop.y };
+
+  // Tile-grid reference frame for the DJ booth / bar equipment (see gridPt/isoBox above).
+  const grid = { top: diamondTop, dR: baseRightDelta, dB: baseBottomDelta, dL: baseLeftDelta };
 
   const computeDiamondFromTop = (topPoint) => {
     const r = { x: topPoint.x + baseRightDelta.x * scaleFactor, y: topPoint.y + baseRightDelta.y * scaleFactor };
@@ -1106,6 +1355,14 @@ export default function ClubGameInner() {
             shadowBlur={6 * uiScale}
           />
 
+          {/* DJ booth, speaker stacks and bar, standing on the tile grid at the back */}
+          <Shape
+            listening={false}
+            sceneFunc={(ctx) => {
+              drawClubEquipment(ctx, grid, scaleX, scaleY, uiScale, sprite3aImage, sprite2cImage, bounceOffset3a, bounceOffset2c);
+            }}
+          />
+
           {/* Character shadow */}
           <Rect
             x={characterPos.x * scaleX - (14 * scaleX)}
@@ -1339,38 +1596,6 @@ export default function ClubGameInner() {
               width={32 * scaleX}
               height={32 * scaleY}
               fill="#ff8800"
-              opacity={1}
-            />
-          )}
-
-          {/* Character3a shadow */}
-          <Rect
-            x={character3aPos.x * scaleX - (14 * scaleX)}
-            y={character3aPos.y * scaleY + (8 * scaleY)}
-            width={28 * scaleX}
-            height={16 * scaleY}
-            fill="#000000"
-            opacity={0.15 - (bounceOffset3a * 0.02)}
-            cornerRadius={14 * scaleX}
-          />
-          
-          {/* Sprite3a */}
-          {sprite3aImage ? (
-            <KonvaImage
-              image={sprite3aImage}
-              x={character3aPos.x * scaleX - (16 * scaleX)}
-              y={(character3aPos.y + bounceOffset3a) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              opacity={1}
-            />
-          ) : (
-            <Rect
-              x={character3aPos.x * scaleX - (16 * scaleX)}
-              y={(character3aPos.y + bounceOffset3a) * scaleY - (16 * scaleY)}
-              width={32 * scaleX}
-              height={32 * scaleY}
-              fill="#8800ff"
               opacity={1}
             />
           )}
