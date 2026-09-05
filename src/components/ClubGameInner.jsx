@@ -49,7 +49,7 @@ const DRINK_ORDER_MIN_DELAY_MS = 20000;
 const DRINK_ORDER_MAX_DELAY_MS = 40000;
 const VIP_POINT_MIN_DELAY_MS = 7500;
 const VIP_POINT_MAX_DELAY_MS = 15000;
-const POPUP_DURATION_MS = 1800;
+const POPUP_DURATION_MS = 2800;
 const POPUP_BASE_OFFSET = 55; // unscaled reference-frame px above the dancer's head the popup starts at
 const POPUP_RISE = 30; // unscaled reference-frame px the popup floats up over its lifetime, on top of the base offset
 
@@ -851,57 +851,50 @@ export default function ClubGameInner() {
             );
           })}
 
-          {/* Money / VIP gain popups, floating up from wherever they were earned, as a
-              small bordered badge rather than bare text. Drink-order popups carry a `subtext`
+          {/* Money / VIP gain popups, floating up from wherever they were earned, as bare
+              text with no background or border. Drink-order popups carry a `subtext`
               itemizing the drink vs. tip, rendered as a smaller second line under the total. */}
           {popups.map((p) => {
             const age = Date.now() - p.spawnTime;
             if (age > POPUP_DURATION_MS) return null;
             const t = age / POPUP_DURATION_MS;
-            const widestLine = Math.max(12 + p.text.length * 5, p.subtext ? 12 + p.subtext.length * 3.6 : 0);
-            const badgeW = widestLine;
-            const badgeH = p.subtext ? 27 : 24;
-            const left = p.x - badgeW / 2;
-            const top = p.y - POPUP_BASE_OFFSET - POPUP_RISE * t - badgeH / 2;
-            const totalH = p.subtext ? badgeH * 0.62 : badgeH;
+            const textW = Math.max(12 + p.text.length * 5, p.subtext ? 12 + p.subtext.length * 4.2 : 0);
+            const textH = p.subtext ? 17 : 24;
+            const left = p.x - textW / 2;
+            const top = p.y - POPUP_BASE_OFFSET - POPUP_RISE * t - textH / 2;
+            const totalH = p.subtext ? 9 : textH;
             return (
               <Group key={p.id} opacity={1 - t} listening={false}>
-                <Rect
-                  x={left * scaleX}
-                  y={top * scaleY}
-                  width={badgeW * scaleX}
-                  height={badgeH * scaleY}
-                  cornerRadius={3 * uiScale}
-                  fill="#15152bdd"
-                  stroke={p.color}
-                  strokeWidth={1 * uiScale}
-                  shadowColor={p.color}
-                  shadowBlur={3 * uiScale}
-                />
                 <Text
                   text={p.text}
                   x={left * scaleX}
                   y={top * scaleY}
-                  width={badgeW * scaleX}
+                  width={textW * scaleX}
                   height={totalH * scaleY}
                   align="center"
                   verticalAlign="middle"
                   fontSize={7.5 * uiScale}
                   fontStyle="bold"
                   fill={p.color}
+                  shadowColor="#000000"
+                  shadowBlur={4 * uiScale}
+                  shadowOpacity={0.8}
                 />
                 {p.subtext && (
                   <Text
                     text={p.subtext}
                     x={left * scaleX}
                     y={(top + totalH) * scaleY}
-                    width={badgeW * scaleX}
-                    height={(badgeH - totalH) * scaleY}
+                    width={textW * scaleX}
+                    height={(textH - totalH) * scaleY}
                     align="center"
                     verticalAlign="middle"
-                    fontSize={5 * uiScale}
+                    fontSize={6.5 * uiScale}
                     fill={p.color}
                     opacity={0.8}
+                    shadowColor="#000000"
+                    shadowBlur={3 * uiScale}
+                    shadowOpacity={0.8}
                   />
                 )}
               </Group>
