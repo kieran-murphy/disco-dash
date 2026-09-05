@@ -4,15 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import DjBooth, { DJ_BOOTH_BACK_LIMIT } from "./DjBooth";
 import Bar from "./Bar";
 import StatsHud from "./StatsHud";
+import StartNightOverlay from "./StartNightOverlay";
+import SpotifyPanel from "./SpotifyPanel";
+import useSpotifyNowPlaying from "@/hooks/useSpotifyNowPlaying";
 
 // Every roaming character is a potential customer (the DJ and bartender are staff, not
-// patrons) — 9 of them, so that's the floor's capacity. They start at 0 and arrive one at a
+// patrons) — 10 of them, so that's the floor's capacity. They start at 0 and arrive one at a
 // time up to that cap. Order here is arrival order, and doubles as the index into the
 // dancer-state arrays below (position, sprite, bounce, ...) for that dancer.
-const DANCER_KEYS = ["character", "character1b", "character1c", "character2", "character2b", "character2c", "character2d", "character3b", "character3c"];
+const DANCER_KEYS = ["character", "character1b", "character1c", "character2", "character2b", "character2c", "character2d", "character3a", "character3b", "character3c"];
 const MAX_CUSTOMERS = DANCER_KEYS.length;
-const DANCER_SPRITES = ["sprite1.png", "sprite1b.png", "sprite1c.png", "sprite2.png", "sprite2b.png", "sprite2c.png", "sprite2d.png", "sprite3b.png", "sprite3c.png"];
-const DANCER_FALLBACK_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff", "#ff8800", "#0088ff", "#ff0088"];
+const DANCER_SPRITES = ["sprite1.png", "sprite1b.png", "sprite1c.png", "sprite2.png", "sprite2b.png", "sprite2c.png", "sprite2d.png", "sprite3a.png", "sprite3b.png", "sprite3c.png"];
+const DANCER_FALLBACK_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff", "#ff8800", "#00ff88", "#0088ff", "#ff0088"];
 // y values below DJ_BOOTH_BACK_LIMIT (214) land inside the DJ booth/bar footprint at the
 // back of the floor, so every spawn (and matching initial target below) stays under it.
 const DANCER_INITIAL_POSITIONS = [
@@ -23,23 +26,34 @@ const DANCER_INITIAL_POSITIONS = [
   { x: 320, y: 235 },
   { x: 240, y: 260 },
   { x: 360, y: 270 },
+  { x: 300, y: 225 },
   { x: 260, y: 240 },
   { x: 340, y: 255 },
 ];
-// Staggered starting offsets so all 9 dancers don't begin their first dance cycle in lockstep.
-const DANCER_DANCE_TIMER_OFFSETS = [0, 16, 32, 48, 64, 80, 96, 128, 144];
+// Staggered starting offsets so all 10 dancers don't begin their first dance cycle in lockstep.
+const DANCER_DANCE_TIMER_OFFSETS = [0, 16, 32, 48, 64, 80, 96, 112, 128, 144];
 // The bartender (see <Bar> below) reuses this dancer's sprite rather than loading its own copy.
 const BARTENDER_DANCER_INDEX = DANCER_KEYS.indexOf("character2c");
 
 const CUSTOMER_ARRIVAL_MIN_MS = 6000;
 const CUSTOMER_ARRIVAL_MAX_MS = 12000;
-const MONEY_PER_CUSTOMER_PER_TICK = 2;
-const MONEY_TICK_MS = 1000;
+const DRINK_PRICE_MIN = 12;
+const DRINK_PRICE_MAX = 18;
+const DRINK_TIP_MIN = 2;
+const DRINK_TIP_MAX = 4;
+// Realistic bar pacing: how often a given customer orders another drink, on average. The
+// event loop below picks one random customer at a time and fires more often as the floor
+// fills up, which keeps this per-customer average constant regardless of headcount (see the
+// effect's own comment for the math) — VIP mode then speeds that up further.
+const DRINK_ORDER_MIN_DELAY_MS = 20000;
+const DRINK_ORDER_MAX_DELAY_MS = 40000;
 const VIP_POINT_MIN_DELAY_MS = 7500;
 const VIP_POINT_MAX_DELAY_MS = 15000;
-const POPUP_DURATION_MS = 1100;
+const POPUP_DURATION_MS = 1800;
 const POPUP_BASE_OFFSET = 55; // unscaled reference-frame px above the dancer's head the popup starts at
 const POPUP_RISE = 30; // unscaled reference-frame px the popup floats up over its lifetime, on top of the base offset
+
+const MONEY_STORAGE_KEY = "disco-dash-money";
 
 // VIP mode: a timed burst bought with VIP points (see GOALS.md). Locked out while one is
 // already active — no re-buying to extend it — and each purchase's cost scales up from the last.
@@ -50,6 +64,12 @@ const VIP_MODE_MONEY_MULTIPLIER = 3;
 const VIP_MODE_ARRIVAL_MULTIPLIER = 2;
 const VIP_TAG_OFFSET_Y = 28; // unscaled reference-frame px above the dancer's head the VIP tag sits at
 const VIP_GLOW_COLOR = "#ffd75f";
+
+// Spotify's per-track tempo/energy data (Audio Features/Analysis) is gated behind manual
+// approval for new apps, so this reacts to something always available instead: whether a
+// track is actively playing on the logged-in user's account right now. A cruder "the music's
+// on" boost rather than a real beat sync — dancers arrive a bit faster while it's true.
+const SPOTIFY_ARRIVAL_MULTIPLIER = 1.25;
 
 // Shared footprint for wherever dancers are allowed to roam: scales the original small diamond by
 // the same factor the dance floor's tile grid and back walls are extended by (see maxSteps below),
@@ -153,8 +173,25 @@ function applySeparation(x, y, otherPositions, minSeparation = 30) {
 export default function ClubGameInner() {
   const [dimensions, setDimensions] = useState({ width: 600, height: 400 });
 
-  const [money, setMoney] = useState(0);
+  // Persisted across sessions so earnings survive a page reload — everything else (customers,
+  // VIP points, isOpen) stays session-only, see their own comments below.
+  const [money, setMoney] = useState(() => {
+    const stored = Number(localStorage.getItem(MONEY_STORAGE_KEY));
+    return Number.isFinite(stored) ? stored : 0;
+  });
+  useEffect(() => {
+    localStorage.setItem(MONEY_STORAGE_KEY, String(money));
+  }, [money]);
+
   const [vipPoints, setVipPoints] = useState(0);
+
+  // Gates the whole economy (customer arrivals, money, VIP points) behind a "Start Night"
+  // click — see <StartNightOverlay> below. Not persisted, so every fresh load starts closed.
+  const [isOpen, setIsOpen] = useState(false);
+  const isOpenRef = useRef(false);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
 
   // Customers trickle in one at a time until the floor's full — DANCER_KEYS[i] becomes
   // visible once `customers` passes i (see the dancer render map further down).
@@ -175,16 +212,27 @@ export default function ClubGameInner() {
     vipModeEndTimeRef.current = vipModeEndTime;
   }, [vipModeEndTime]);
 
+  // Spotify now-playing: read-only, polled elsewhere (see useSpotifyNowPlaying). Mirrored into
+  // a ref for the same reason vipModeEndTime is — the arrival timer's setTimeout callback needs
+  // the live value without going stale between its own re-schedules.
+  const { isLoggedIn: spotifyLoggedIn, track: spotifyTrack, login: spotifyLogin, logout: spotifyLogout } = useSpotifyNowPlaying();
+  const spotifyPlayingRef = useRef(false);
   useEffect(() => {
+    spotifyPlayingRef.current = !!spotifyTrack?.isPlaying;
+  }, [spotifyTrack]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     if (customers >= MAX_CUSTOMERS) return;
     const baseDelay = CUSTOMER_ARRIVAL_MIN_MS + Math.random() * (CUSTOMER_ARRIVAL_MAX_MS - CUSTOMER_ARRIVAL_MIN_MS);
-    const active = vipModeEndTimeRef.current > Date.now();
-    const delay = active ? baseDelay / VIP_MODE_ARRIVAL_MULTIPLIER : baseDelay;
+    const vipActive = vipModeEndTimeRef.current > Date.now();
+    let delay = vipActive ? baseDelay / VIP_MODE_ARRIVAL_MULTIPLIER : baseDelay;
+    if (spotifyPlayingRef.current) delay /= SPOTIFY_ARRIVAL_MULTIPLIER;
     const timeoutId = setTimeout(() => {
       setCustomers((prev) => Math.min(prev + 1, MAX_CUSTOMERS));
     }, delay);
     return () => clearTimeout(timeoutId);
-  }, [customers]);
+  }, [customers, isOpen]);
 
   // Per-dancer sprite images, keyed by the same index as DANCER_KEYS.
   const [dancerImages, setDancerImages] = useState(() => DANCER_KEYS.map(() => null));
@@ -221,10 +269,10 @@ export default function ClubGameInner() {
     return dancerStateRef.current[idx].pos;
   }
 
-  function spawnPopup(text, pos, color) {
+  function spawnPopup(text, pos, color, subtext) {
     const id = ++popupIdRef.current;
     const spawnTime = Date.now();
-    setPopups((prev) => [...prev.filter((p) => spawnTime - p.spawnTime < POPUP_DURATION_MS), { id, text, x: pos.x, y: pos.y, color, spawnTime }]);
+    setPopups((prev) => [...prev.filter((p) => spawnTime - p.spawnTime < POPUP_DURATION_MS), { id, text, subtext, x: pos.x, y: pos.y, color, spawnTime }]);
   }
 
   // Spends VIP points to trigger VIP mode: multipliers spike and the floor tiles go rainbow for
@@ -241,18 +289,36 @@ export default function ClubGameInner() {
     }
   }
 
-  // Money trickles in from whoever's on the floor — more customers, more money per tick.
-  // VIP mode multiplies the per-tick amount while active.
+  // Money comes from individual drink orders: one random customer on the floor orders a drink
+  // (DRINK_PRICE_MIN-MAX) plus a tip (DRINK_TIP_MIN-MAX) at a time, picked the same way VIP
+  // points are below. Each event's own delay is the per-customer average (DRINK_ORDER_MIN/MAX_
+  // DELAY_MS) divided by the current headcount — with N customers, only 1/N of events land on
+  // any given one of them, so dividing by N there exactly cancels out, leaving every customer's
+  // own average ordering gap at DRINK_ORDER_MIN-MAX_DELAY_MS regardless of how full the floor
+  // is. VIP mode speeds up ordering (same multiplier as arrivals) and multiplies the payout.
   useEffect(() => {
-    const interval = setInterval(() => {
+    let timeoutId;
+    const scheduleNext = () => {
       const current = customersRef.current;
-      if (current <= 0) return;
+      if (!isOpenRef.current || current <= 0) {
+        timeoutId = setTimeout(scheduleNext, 2000);
+        return;
+      }
       const active = vipModeEndTimeRef.current > Date.now();
-      const amount = current * MONEY_PER_CUSTOMER_PER_TICK * (active ? VIP_MODE_MONEY_MULTIPLIER : 1);
-      setMoney((prev) => prev + amount);
-      spawnPopup(`+$${amount}`, pickRandomDancerPos(), "#5fe3ff");
-    }, MONEY_TICK_MS);
-    return () => clearInterval(interval);
+      const baseDelay = (DRINK_ORDER_MIN_DELAY_MS + Math.random() * (DRINK_ORDER_MAX_DELAY_MS - DRINK_ORDER_MIN_DELAY_MS)) / current;
+      const delay = active ? baseDelay / VIP_MODE_ARRIVAL_MULTIPLIER : baseDelay;
+      timeoutId = setTimeout(() => {
+        const drinkPrice = Math.round(DRINK_PRICE_MIN + Math.random() * (DRINK_PRICE_MAX - DRINK_PRICE_MIN));
+        const tip = Math.round(DRINK_TIP_MIN + Math.random() * (DRINK_TIP_MAX - DRINK_TIP_MIN));
+        const stillActive = vipModeEndTimeRef.current > Date.now();
+        const amount = (drinkPrice + tip) * (stillActive ? VIP_MODE_MONEY_MULTIPLIER : 1);
+        setMoney((prev) => prev + amount);
+        spawnPopup(`+$${drinkPrice}`, pickRandomDancerPos(), "#5fe3ff", `+$${tip} tip`);
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
+    return () => clearTimeout(timeoutId);
   }, []);
 
   // VIP points trickle in at random intervals, as if a VIP guest just tipped — a fuller
@@ -262,7 +328,7 @@ export default function ClubGameInner() {
     let timeoutId;
     const scheduleNext = () => {
       const current = customersRef.current;
-      if (current <= 0) {
+      if (!isOpenRef.current || current <= 0) {
         timeoutId = setTimeout(scheduleNext, 2000);
         return;
       }
@@ -530,6 +596,8 @@ export default function ClubGameInner() {
 
   return (
     <div className="flex flex-col items-center">
+      {!isOpen && <StartNightOverlay onOpen={() => setIsOpen(true)} />}
+      <SpotifyPanel isLoggedIn={spotifyLoggedIn} track={spotifyTrack} onLogin={spotifyLogin} onLogout={spotifyLogout} />
       <StatsHud
         money={money}
         customers={customers}
@@ -784,15 +852,18 @@ export default function ClubGameInner() {
           })}
 
           {/* Money / VIP gain popups, floating up from wherever they were earned, as a
-              small bordered badge rather than bare text. */}
+              small bordered badge rather than bare text. Drink-order popups carry a `subtext`
+              itemizing the drink vs. tip, rendered as a smaller second line under the total. */}
           {popups.map((p) => {
             const age = Date.now() - p.spawnTime;
             if (age > POPUP_DURATION_MS) return null;
             const t = age / POPUP_DURATION_MS;
-            const badgeW = 10 + p.text.length * 5;
-            const badgeH = 12;
+            const widestLine = Math.max(12 + p.text.length * 5, p.subtext ? 12 + p.subtext.length * 3.6 : 0);
+            const badgeW = widestLine;
+            const badgeH = p.subtext ? 27 : 24;
             const left = p.x - badgeW / 2;
             const top = p.y - POPUP_BASE_OFFSET - POPUP_RISE * t - badgeH / 2;
+            const totalH = p.subtext ? badgeH * 0.62 : badgeH;
             return (
               <Group key={p.id} opacity={1 - t} listening={false}>
                 <Rect
@@ -812,13 +883,27 @@ export default function ClubGameInner() {
                   x={left * scaleX}
                   y={top * scaleY}
                   width={badgeW * scaleX}
-                  height={badgeH * scaleY}
+                  height={totalH * scaleY}
                   align="center"
                   verticalAlign="middle"
                   fontSize={7.5 * uiScale}
                   fontStyle="bold"
                   fill={p.color}
                 />
+                {p.subtext && (
+                  <Text
+                    text={p.subtext}
+                    x={left * scaleX}
+                    y={(top + totalH) * scaleY}
+                    width={badgeW * scaleX}
+                    height={(badgeH - totalH) * scaleY}
+                    align="center"
+                    verticalAlign="middle"
+                    fontSize={5 * uiScale}
+                    fill={p.color}
+                    opacity={0.8}
+                  />
+                )}
               </Group>
             );
           })}
